@@ -52,23 +52,36 @@ jobs:
 
       - run: npm ci
 
+      # continue-on-error so a red suite still produces an installer people can
+      # try. The job is failed deliberately at the end, after the upload, so a
+      # failure is never silently swallowed.
       - name: Run the offline suites
         id: tests
+        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
           npm test 2>&1 | tee test-output.txt
 
       - name: Show what failed
-        if: failure() && steps.tests.outcome == 'failure'
+        if: steps.tests.outcome == 'failure'
         shell: bash
         run: |
           {
             echo "## Test failure on ${{ matrix.label }}"
             echo '```'
-            grep -E 'FAIL|ERROR|exited with|suites' test-output.txt | tail -40 || tail -60 test-output.txt
+            tail -80 test-output.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Kept alongside the installer so the failure can be read without a token.
+      - name: Keep the test output
+        if: steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.label }}
+          path: test-output.txt
+          retention-days: 14
 
       - name: Draw the icon set
         run: npm run icons
@@ -104,6 +117,13 @@ jobs:
           path: ${{ matrix.artifacts }}
           if-no-files-found: warn
           retention-days: 14
+
+      # Now that the installer is safely uploaded, make the failure count.
+      - name: Fail if the suites did not pass
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo "The build is published, but the test suites failed on ${{ matrix.label }}."
+          exit 1
 
   release:
     name: Publish release
