@@ -32,7 +32,9 @@ const self = 'C:\\Program Files\\Fletch\\Fletch.exe';
 const stale = 'C:\\Users\\me\\Documents\\Fletch\\release\\win-unpacked\\Fletch.exe';
 check(stale.toLowerCase() !== self.toLowerCase(),
   'an association pointing at an old build folder is not treated as current');
-check(isFletch(stale) && path.basename(stale).toLowerCase() === path.basename(self).toLowerCase(),
+// path.win32 explicitly: these are Windows paths, and this suite also runs on
+// the Linux and macOS CI runners, where plain path.basename ignores backslashes.
+check(isFletch(stale) && path.win32.basename(stale).toLowerCase() === path.win32.basename(self).toLowerCase(),
   'both are called Fletch.exe, which is why matching on the name alone is not enough');
 
 process.exitCode = failed ? 1 : 0;
