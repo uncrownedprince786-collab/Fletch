@@ -1,7 +1,7 @@
 {
   "name": "fletch",
   "productName": "Fletch",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A fast, free download manager: multi-connection acceleration, video extraction from 1800+ sites, and torrents. No licence key, no subscription.",
   "main": "src/main/main.js",
   "license": "MIT",
@@ -32,7 +32,10 @@
     "files": [
       "src/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/utp-native/**/*",
+      "!node_modules/**/*.{md,markdown,map,ts}",
+      "!node_modules/**/{test,tests,example,examples,doc,docs}/**/*"
     ],
     "win": {
       "target": [
@@ -135,7 +138,8 @@
     ],
     "portable": {
       "artifactName": "Fletch-Portable-${version}-${arch}.${ext}"
-    }
+    },
+    "npmRebuild": false
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

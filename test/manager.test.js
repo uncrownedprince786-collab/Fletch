@@ -21,6 +21,24 @@ const FILES = {
 
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
+
+  // Large and deliberately slow: used by the cancel test so there is always a
+  // download in flight to cancel.
+  if (url === '/slow.bin') {
+    const total = 64 * 1024 * 1024;
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream',
+      'Content-Length': String(total), 'Accept-Ranges': 'bytes' });
+    let sent = 0;
+    const tick = () => {
+      if (res.destroyed || sent >= total) return;
+      res.write(Buffer.alloc(16 * 1024));
+      sent += 16 * 1024;
+      setTimeout(tick, 50);
+    };
+    tick();
+    return;
+  }
+
   const f = FILES[url];
   if (!f) { res.writeHead(404).end(); return; }
   const m = /bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
@@ -129,11 +147,18 @@ server.listen(0, '127.0.0.1', async () => {
     check(fs.readFileSync(t.filePath).equals(FILES['/clip.mp4'].body), 'resumed file is still byte-perfect');
 
     // ---- cancel cleans up ----
-    const c = await mgr.add(base + '/setup.exe', { allowDuplicate: true });
-    await until(() => c.state === 'running' && c.downloaded > 0, 'second download under way');
+    // A dribbling endpoint, so the download is reliably still running when we
+    // cancel it. On a fast loopback a small file finishes between polls, and
+    // cancelling something already done proves nothing.
+    const c = await mgr.add(base + '/slow.bin', { allowDuplicate: true });
+    await until(() => c.downloaded > 0 && c.state === 'running', 'second download under way');
     mgr.cancel(c.id);
     await until(() => c.state === 'cancelled', 'cancelled');
-    await wait(400);
+    // Tearing down is not instant - every connection has to unwind before the
+    // partial file can go, which takes about a second with four of them. Wait
+    // for the outcome rather than guessing at a delay.
+    await until(() => !fs.existsSync(c.filePath + '.fletchpart'),
+      'the partial file to be cleaned up', 20000);
     check(!fs.existsSync(c.filePath + '.fletchpart'), 'cancel removed the partial file');
 
     // ---- persistence across a restart ----
