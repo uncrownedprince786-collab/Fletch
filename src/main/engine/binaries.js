@@ -3,8 +3,9 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
-const { request } = require('./net');
+const { request, fetchText } = require('./net');
 
 // Fletch ships no third-party binaries. It can fetch two optional helpers from
 // their official release pages, on an explicit click, and otherwise uses
@@ -15,11 +16,37 @@ const { request } = require('./net');
 
 const RELEASES = {
   'yt-dlp': {
-    win32: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', file: 'yt-dlp.exe' },
-    darwin: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos', file: 'yt-dlp' },
-    linux: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp', file: 'yt-dlp' },
+    // `asset` is the name as it appears in the project's own checksum file.
+    win32: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', file: 'yt-dlp.exe', asset: 'yt-dlp.exe' },
+    darwin: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos', file: 'yt-dlp', asset: 'yt-dlp_macos' },
+    linux: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp', file: 'yt-dlp', asset: 'yt-dlp' },
   },
 };
+
+const YTDLP_SUMS = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
+
+/**
+ * The SHA-256 the project published for this asset, or null if the checksum
+ * file could not be read.
+ */
+async function publishedChecksum(assetName, sumsUrl) {
+  const { body } = await fetchText(sumsUrl || YTDLP_SUMS, { maxBytes: 256 * 1024, timeout: 30000 });
+  for (const line of body.split(/\r?\n/)) {
+    const m = /^([a-f0-9]{64})\s+\*?(\S+)$/i.exec(line.trim());
+    if (m && m[2] === assetName) return m[1].toLowerCase();
+  }
+  return null;
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(file);
+    stream.on('data', (d) => hash.update(d));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
 
 const FFMPEG_HINTS = {
   win32: 'https://www.gyan.dev/ffmpeg/builds/  (grab "release essentials", unzip, point Fletch at ffmpeg.exe)',
@@ -90,8 +117,10 @@ class Binaries {
    * Fetch yt-dlp from its official GitHub release into Fletch's own bin folder.
    * Only ever called from an explicit user action in Settings.
    */
-  async installYtDlp(onProgress) {
-    const spec = RELEASES['yt-dlp'][process.platform];
+  async installYtDlp(onProgress, override) {
+    // `override` lets the tests point this at a local stand-in for the real
+    // release, so the verification can be exercised without the network.
+    const spec = override || RELEASES['yt-dlp'][process.platform];
     if (!spec) throw new Error(`No yt-dlp build is published for ${process.platform}.`);
 
     await fsp.mkdir(this.binDir, { recursive: true });
@@ -125,6 +154,31 @@ class Binaries {
       throw new Error('The downloaded file was too small to be yt-dlp; aborting.');
     }
 
+    // This file is about to be executed, so size is nowhere near enough.
+    // yt-dlp publishes a SHA-256 for every asset; check against it and refuse
+    // anything that does not match.
+    let expected = null;
+    try {
+      expected = await publishedChecksum(spec.asset, spec.sums);
+    } catch {
+      expected = null; // checksum file unreachable; handled just below
+    }
+    if (!expected) {
+      await fsp.rm(tmp, { force: true });
+      throw new Error(
+        'Could not fetch yt-dlp’s published checksums, so the download could not be '
+        + 'verified. Nothing was installed. Check your connection and try again.'
+      );
+    }
+    const actual = await sha256File(tmp);
+    if (actual !== expected) {
+      await fsp.rm(tmp, { force: true });
+      throw new Error(
+        'The downloaded yt-dlp did not match its published checksum, so it was discarded. '
+        + 'Do not install it by hand — this should never happen on a clean connection.'
+      );
+    }
+
     await fsp.rm(target, { force: true }).catch(() => {});
     await fsp.rename(tmp, target);
     if (process.platform !== 'win32') await fsp.chmod(target, 0o755);
@@ -132,7 +186,7 @@ class Binaries {
     this._cache.delete('yt-dlp');
     const resolved = await this.resolve('yt-dlp');
     if (!resolved) throw new Error('yt-dlp was downloaded but would not run.');
-    return { path: resolved, size: stat.size };
+    return { path: resolved, size: stat.size, sha256: actual };
   }
 
   async updateYtDlp() {
@@ -168,4 +222,4 @@ function defaultBinDir(userDataPath) {
   return path.join(userDataPath || path.join(os.homedir(), '.fletch'), 'bin');
 }
 
-module.exports = { Binaries, defaultBinDir, FFMPEG_HINTS };
+module.exports = { Binaries, defaultBinDir, FFMPEG_HINTS, publishedChecksum, sha256File };
