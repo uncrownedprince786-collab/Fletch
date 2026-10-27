@@ -31,7 +31,11 @@ const server = http.createServer((req, res) => {
   });
 
   if (sulking) {
-    res.write(DATA.subarray(start, start + 1024)); // a trickle, then silence
+    // A trickle, then silence. Clamped to the range we promised: writing more
+    // bytes than Content-Length makes Node tear the response down with an
+    // error, which is not the behaviour this test is trying to produce.
+    const trickle = Math.min(1024, end - start + 1);
+    res.write(DATA.subarray(start, start + trickle));
     return;
   }
 
