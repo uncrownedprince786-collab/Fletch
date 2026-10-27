@@ -832,10 +832,11 @@ function setupDialog(info) {
     more.appendChild(moreTitle);
 
     more.appendChild(el('p', null,
-      'A page is not a file, so Fletch uses yt-dlp to find the video on one. '
-      + 'It comes from yt-dlp’s official release and is checked against their published '
-      + 'checksum before it is kept. Without it, links to pages fail in a way that looks '
-      + 'like a broken download rather than a missing helper.'));
+      'A page is not a file, so Fletch uses two helpers to get the video off one: yt-dlp to '
+      + 'find it, and ffmpeg to put the picture and sound back together. Fletch fetches both '
+      + 'by itself shortly after it starts, from their official releases, checking each '
+      + 'against the checksum its project publishes. There is nothing for you to do — '
+      + 'this is only here so you know what it is downloading.'));
 
     const toolRow = el('div');
     toolRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:10px';
@@ -851,8 +852,8 @@ function setupDialog(info) {
       const have = Boolean(st && st.ytdlp && st.ytdlp.installed);
       toolBtn.hidden = have;
       toolState.textContent = have
-        ? 'Installed. Links to pages will work.'
-        : 'Not installed. About 23 MB.';
+        ? 'yt-dlp is installed. Links to pages will work.'
+        : 'Fletch will fetch these shortly. This button only hurries it along.';
     };
     fletch.tools.status().then((r) => { if (r.ok) paintTool(r.data); });
     toolBtn.onclick = async () => {
@@ -1082,7 +1083,12 @@ function settingsDialog() {
         () => fletch.tools.installYtDlp());
       card('ffmpeg', st.ffmpeg,
         'Needed to join separate video and audio tracks, and to repack streams as MP4.',
-        null, `Install it yourself, then point Fletch at it: ${st.ffmpeg.hint || ''}`);
+        st.ffmpeg.canAutoInstall ? () => fletch.tools.installFfmpeg() : null,
+        st.ffmpeg.canAutoInstall ? '' : `Install it yourself, then point Fletch at it: ${st.ffmpeg.hint || ''}`);
+
+      checkField(holder, 'autoHelpers', 'Keep these installed and up to date',
+        'Fletch fetches them on first run and refreshes them weekly, checking each against '
+        + 'the checksum its project publishes. Turn this off to manage them yourself.');
 
       const note = el('p');
       note.style.cssText = 'font-size:11.5px;color:var(--text-dim);line-height:1.6;user-select:text';

@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('fletch', {
   tools: {
     status: () => call('tools:status'),
     installYtDlp: () => call('tools:installYtDlp'),
+    installFfmpeg: () => call('tools:installFfmpeg'),
     ffmpegHint: () => call('tools:ffmpegHint'),
   },
   app: {

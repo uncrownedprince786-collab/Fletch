@@ -216,14 +216,48 @@ const PERMALINK = [
  * nothing, and it ends up following a redirect to a login page. The post's
  * own permalink is almost always sitting next to the video.
  */
+/**
+ * The link to the post this video belongs to, when there is one it can be
+ * sure of.
+ *
+ * "Sure of" is the whole job. Walking up and taking the first matching link in
+ * each ancestor's subtree finds *a* link, not *this* video's link: a few
+ * levels above a YouTube player sits a container holding the entire sidebar,
+ * and the first match there is whatever is queued up next. Guessing wrong here
+ * does not fail — it quietly downloads someone else's video.
+ *
+ * So: the anchor the video is actually inside, which is how feeds mark a post;
+ * failing that, an ancestor containing exactly one candidate, which leaves no
+ * room to pick the wrong one. An ancestor with several is ambiguous and is
+ * treated as no answer at all.
+ */
 function permalinkFor(video) {
-  let node = video;
+  const own = video.closest ? video.closest('a[href]') : null;
+  if (own && own.href && /^https?:/i.test(own.href)) return own.href;
+
+  let node = video.parentElement;
   for (let depth = 0; node && depth < 12; depth++) {
-    const link = node.querySelector ? node.querySelector(PERMALINK) : null;
-    if (link && link.href && /^https?:/i.test(link.href)) return link.href;
+    const links = node.querySelectorAll ? node.querySelectorAll(PERMALINK) : [];
+    if (links.length > 1) return '';   // ambiguous: several videos in view
+    if (links.length === 1 && links[0].href && /^https?:/i.test(links[0].href)) {
+      return links[0].href;
+    }
     node = node.parentElement;
   }
   return '';
+}
+
+/**
+ * Which address to hand to Fletch for the video being watched.
+ *
+ * A permalink only wins on a feed, where the address bar is showing a list
+ * rather than the thing playing. On a page that is already about one video,
+ * the address bar is right, and a link found nearby is as likely to be the
+ * next video along.
+ */
+function chooseTarget(href, permalink) {
+  if (permalink && isFeedUrl(href)) return permalink;
+  return href;
 }
 
 /** A feed or app shell, where the current URL names no particular video. */
@@ -244,10 +278,7 @@ function grab() {
 
   // Prefer the post's own permalink over whatever the address bar happens to
   // be showing, which on a feed is not this video at all.
-  const permalink = permalinkFor(video);
-  const pageUrl = (permalink && (isFeedUrl(location.href) || permalink !== location.href))
-    ? permalink
-    : location.href;
+  const pageUrl = chooseTarget(location.href, permalinkFor(video));
 
   chrome.runtime.sendMessage({
     type: 'grab-video',
@@ -278,10 +309,40 @@ document.addEventListener('click', (e) => {
     type: 'grab-magnet',
     payload: { url: link.href },
   }, (reply) => {
-    if (reply && reply.ok) toast('Torrent sent to Fletch.');
-    else toast(reply && reply.reason ? reply.reason : 'Could not reach Fletch — is it running?');
+    if (magnetWasTaken(reply)) {
+      toast('Torrent sent to Fletch.');
+      return;
+    }
+    // Fletch is not running, and this listener has just swallowed a click that
+    // would otherwise have reached the system — which would have started
+    // Fletch through the magnet handler it registers at install. Intercepting
+    // a link is only defensible while it leads somewhere better, so when it
+    // does not, hand the link back and get out of the way.
+    toast('Fletch is not running — handing this to Windows.');
+    handOffMagnet(link.href);
   });
 }, true);
+
+/** Whether Fletch took the magnet, or the system should get it instead. */
+function magnetWasTaken(reply) {
+  return Boolean(reply && reply.ok);
+}
+
+/**
+ * Let the system take a magnet link after all.
+ *
+ * Navigating to it is what the browser would have done on its own, and it
+ * reaches whichever application is registered for magnet links — Fletch,
+ * where the user has chosen it.
+ */
+function handOffMagnet(href) {
+  try {
+    location.href = href;
+  } catch {
+    // A page that forbids navigation. Nothing further to try, and the toast
+    // above has already said what happened.
+  }
+}
 
 // ---------------------------------------------------------------- lifecycle
 
@@ -295,4 +356,10 @@ function start() {
   // Single-page apps swap video without touching the DOM we are watching.
   setInterval(schedule, 1200);
   schedule();
+}
+
+// Exported for the tests. There is no module object in a content script, so
+// this is inert in the browser.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { chooseTarget, isFeedUrl, permalinkFor, magnetWasTaken, PERMALINK };
 }

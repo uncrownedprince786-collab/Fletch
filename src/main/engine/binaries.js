@@ -7,12 +7,16 @@ const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const { request, fetchText } = require('./net');
 
-// Fletch ships no third-party binaries. It can fetch two optional helpers from
-// their official release pages, on an explicit click, and otherwise uses
+// Fletch ships no third-party binaries. It fetches two helpers from their
+// official release pages and keeps them in its own folder, falling back to
 // whatever is already on PATH:
 //   yt-dlp  - resolves a page URL to real media URLs (site extractors)
 //   ffmpeg  - muxes separate video/audio tracks and remuxes HLS into MP4
-// Everything Fletch does with a plain file URL works without either of them.
+// Everything Fletch does with a plain file URL works without either of them,
+// but a link to a web page does not, which is most of what people want.
+//
+// Both are verified against the checksum their project publishes before being
+// kept, and anything that does not match is discarded rather than run.
 
 const RELEASES = {
   'yt-dlp': {
@@ -21,7 +25,52 @@ const RELEASES = {
     darwin: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos', file: 'yt-dlp', asset: 'yt-dlp_macos' },
     linux: { url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp', file: 'yt-dlp', asset: 'yt-dlp' },
   },
+  // Windows only, and deliberately. On macOS and Linux ffmpeg comes from a
+  // package manager that installs it better than this could and keeps it
+  // updated afterwards; there is nothing to improve on there.
+  //
+  // The LGPL build, not the GPL one: Fletch runs ffmpeg as a separate program
+  // rather than linking to it, and the lighter licence keeps the choice open
+  // for anyone who later passes a copy of Fletch on. The shared build is a
+  // third of the size of the static one, at the cost of bringing its DLLs
+  // along, which land beside it.
+  ffmpeg: {
+    win32: {
+      url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip',
+      asset: 'ffmpeg-master-latest-win64-lgpl-shared.zip',
+      sums: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256',
+      file: 'ffmpeg.exe',
+      archive: 'zip',
+      take: 'bin', // the folder inside the archive whose contents we keep
+    },
+  },
 };
+
+/** Unpack a zip. Windows only, which is the only platform that needs it. */
+function extractZip(zipFile, destDir) {
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  return new Promise((resolve, reject) => {
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Expand-Archive -LiteralPath ${quote(zipFile)} -DestinationPath ${quote(destDir)} -Force`],
+    { timeout: 10 * 60 * 1000, windowsHide: true }, (err, _out, stderr) => {
+      if (err) reject(new Error(String(stderr || err.message).trim().slice(0, 300) || 'could not unpack'));
+      else resolve();
+    });
+  });
+}
+
+/** The first directory of this name anywhere under root, or null. */
+async function findDir(root, wanted) {
+  let entries;
+  try { entries = await fsp.readdir(root, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === wanted) return path.join(root, entry.name);
+    const deeper = await findDir(path.join(root, entry.name), wanted);
+    if (deeper) return deeper;
+  }
+  return null;
+}
 
 const YTDLP_SUMS = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
 
@@ -107,25 +156,46 @@ class Binaries {
   async status() {
     const [ytdlp, ffmpeg] = await Promise.all([this.resolve('yt-dlp'), this.resolve('ffmpeg')]);
     return {
-      ytdlp: { path: ytdlp, installed: Boolean(ytdlp), canAutoInstall: Boolean(RELEASES['yt-dlp'][process.platform]) },
-      ffmpeg: { path: ffmpeg, installed: Boolean(ffmpeg), canAutoInstall: false, hint: FFMPEG_HINTS[process.platform] || '' },
+      ytdlp: { path: ytdlp, installed: Boolean(ytdlp), canAutoInstall: this.canAutoInstall('yt-dlp') },
+      ffmpeg: {
+        path: ffmpeg,
+        installed: Boolean(ffmpeg),
+        canAutoInstall: this.canAutoInstall('ffmpeg'),
+        hint: FFMPEG_HINTS[process.platform] || '',
+      },
       binDir: this.binDir,
     };
   }
 
-  /**
-   * Fetch yt-dlp from its official GitHub release into Fletch's own bin folder.
-   * Only ever called from an explicit user action in Settings.
-   */
+  /** Whether this platform has a published build Fletch can fetch itself. */
+  canAutoInstall(name) {
+    return Boolean(RELEASES[name] && RELEASES[name][process.platform]);
+  }
+
   async installYtDlp(onProgress, override) {
+    return this.install('yt-dlp', onProgress, override);
+  }
+
+  /**
+   * Fetch a helper from its official release into Fletch's own bin folder.
+   *
+   * Everything here exists because the file is about to be executed: the size
+   * floor catches an error page served with a 200, and the checksum catches
+   * everything else. Nothing that fails either is kept, let alone run.
+   */
+  async install(name, onProgress, override) {
     // `override` lets the tests point this at a local stand-in for the real
     // release, so the verification can be exercised without the network.
-    const spec = override || RELEASES['yt-dlp'][process.platform];
-    if (!spec) throw new Error(`No yt-dlp build is published for ${process.platform}.`);
+    const spec = override || (RELEASES[name] && RELEASES[name][process.platform]);
+    if (!spec) throw new Error(`No ${name} build is published for ${process.platform}.`);
 
     await fsp.mkdir(this.binDir, { recursive: true });
     const target = path.join(this.binDir, spec.file);
-    const tmp = target + '.part';
+    // An archive is staged under a .zip name: Expand-Archive refuses to look
+    // at a file called anything else, whatever is actually inside it.
+    const tmp = spec.archive === 'zip'
+      ? path.join(this.binDir, `.${name}-download.zip`)
+      : `${target}.part`;
 
     const res = await request(spec.url, { timeout: 60000 });
     if ((res.statusCode || 0) !== 200) {
@@ -151,11 +221,11 @@ class Binaries {
     // A truncated or error-page download would be orders of magnitude smaller.
     if (stat.size < 1024 * 1024) {
       await fsp.rm(tmp, { force: true });
-      throw new Error('The downloaded file was too small to be yt-dlp; aborting.');
+      throw new Error(`The downloaded file was too small to be ${name}; aborting.`);
     }
 
-    // This file is about to be executed, so size is nowhere near enough.
-    // yt-dlp publishes a SHA-256 for every asset; check against it and refuse
+    // This file is about to be executed, so size is nowhere near enough. Both
+    // projects publish a SHA-256 for every asset; check against it and refuse
     // anything that does not match.
     let expected = null;
     try {
@@ -166,7 +236,7 @@ class Binaries {
     if (!expected) {
       await fsp.rm(tmp, { force: true });
       throw new Error(
-        'Could not fetch yt-dlp’s published checksums, so the download could not be '
+        `Could not fetch ${name}’s published checksums, so the download could not be `
         + 'verified. Nothing was installed. Check your connection and try again.'
       );
     }
@@ -174,29 +244,54 @@ class Binaries {
     if (actual !== expected) {
       await fsp.rm(tmp, { force: true });
       throw new Error(
-        'The downloaded yt-dlp did not match its published checksum, so it was discarded. '
+        `The downloaded ${name} did not match its published checksum, so it was discarded. `
         + 'Do not install it by hand — this should never happen on a clean connection.'
       );
     }
 
-    await fsp.rm(target, { force: true }).catch(() => {});
-    await fsp.rename(tmp, target);
-    if (process.platform !== 'win32') await fsp.chmod(target, 0o755);
+    if (spec.archive === 'zip') {
+      // Unpacked somewhere of its own first: a half-extracted archive must not
+      // leave a broken ffmpeg.exe sitting where Fletch would try to run it.
+      const staging = path.join(this.binDir, `.${name}-unpack`);
+      await fsp.rm(staging, { recursive: true, force: true });
+      await fsp.mkdir(staging, { recursive: true });
+      try {
+        await extractZip(tmp, staging);
+        const from = spec.take ? await findDir(staging, spec.take) : staging;
+        if (!from) throw new Error(`The ${name} archive had no ${spec.take} folder in it.`);
+        for (const entry of await fsp.readdir(from, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          await fsp.copyFile(path.join(from, entry.name), path.join(this.binDir, entry.name));
+        }
+      } finally {
+        await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
+        await fsp.rm(tmp, { force: true }).catch(() => {});
+      }
+    } else {
+      await fsp.rm(target, { force: true }).catch(() => {});
+      await fsp.rename(tmp, target);
+      if (process.platform !== 'win32') await fsp.chmod(target, 0o755);
+    }
 
-    this._cache.delete('yt-dlp');
-    const resolved = await this.resolve('yt-dlp');
-    if (!resolved) throw new Error('yt-dlp was downloaded but would not run.');
+    this._cache.delete(name);
+    const resolved = await this.resolve(name);
+    if (!resolved) throw new Error(`${name} was downloaded but would not run.`);
     return { path: resolved, size: stat.size, sha256: actual };
   }
 
   async updateYtDlp() {
-    const bin = await this.resolve('yt-dlp');
-    if (!bin) return this.installYtDlp();
+    return this.update('yt-dlp');
+  }
+
+  /** Replace a helper Fletch installed. One it did not install is not its to touch. */
+  async update(name) {
+    const bin = await this.resolve(name);
+    if (!bin) return this.install(name);
     // A PATH-installed copy is the user's to manage; only self-update our own.
     if (!bin.startsWith(this.binDir)) {
-      throw new Error(`yt-dlp came from ${bin}; update it the way you installed it.`);
+      throw new Error(`${name} came from ${bin}; update it the way you installed it.`);
     }
-    return this.installYtDlp();
+    return this.install(name);
   }
 
   /** Run a tool and collect stdout. Rejects with stderr on a non-zero exit. */

@@ -7,7 +7,8 @@ you or what you download leaves your computer.
 
 ## The desktop app
 
-Fletch makes no network request you did not ask for.
+Fletch makes no network request that is not part of doing its job, and every
+one of them can be switched off.
 
 **What it connects to**
 
@@ -16,8 +17,14 @@ Fletch makes no network request you did not ask for.
 - `api.github.com`, to ask whether a newer version of Fletch exists — only if
   automatic update checks are left on. The request carries no identifier beyond
   the version you are running. Turn it off in **Settings → Updates**.
-- The yt-dlp release page on GitHub, once, only if you press **Install** on the
-  optional helper in **Settings → Helpers**.
+- The yt-dlp and ffmpeg release pages on GitHub, to fetch those two helpers
+  shortly after Fletch first runs, and to refresh them weekly afterwards. They
+  are what turns a link to a web page into a file, and asking people to find
+  and install them by hand meant most never did — a working Fletch that looked
+  broken. Each download is checked against the checksum its own project
+  publishes and discarded if it does not match. The requests carry no
+  identifier. Turn it off in **Settings → Helpers**, and install them yourself
+  if you would rather.
 
 **What it does not do**
 

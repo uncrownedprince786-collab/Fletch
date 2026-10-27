@@ -37,6 +37,10 @@ const DEFAULTS = {
   proxy: '',
   ytdlpPath: '',
   ffmpegPath: '',
+  // Fletch fetches yt-dlp and ffmpeg itself and keeps them current. Off means
+  // the user would rather install and update them their own way.
+  autoHelpers: true,
+  helpersCheckedAt: 0,
   theme: 'dark',
 };
 
@@ -161,6 +165,42 @@ function extensionDir() {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'extension')
     : path.join(__dirname, '..', '..', 'extension');
+}
+
+// Both helpers are fetched the first time Fletch runs and refreshed on this
+// cadence afterwards, so that nobody has to learn they exist. yt-dlp is the
+// one that rots: sites change constantly, and a copy a month old starts
+// failing on the places people actually use.
+const HELPER_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Make sure the helpers are present, and not stale.
+ *
+ * Quiet by design. A failure here means Fletch is no worse off than it was a
+ * moment ago — it tries again next launch rather than interrupting someone to
+ * report that an optional download did not happen.
+ */
+async function ensureHelpers({ refresh = false } = {}) {
+  if (!settings.get('autoHelpers', true)) return;
+  const tell = (name, payload) => {
+    if (win && !win.isDestroyed()) win.webContents.send('tools:progress', { ...payload, name });
+  };
+
+  for (const name of ['yt-dlp', 'ffmpeg']) {
+    if (!binaries.canAutoInstall(name)) continue;
+    try {
+      const have = await binaries.resolve(name);
+      // A copy from PATH belongs to whoever put it there; leave it alone.
+      if (have && !(refresh && have.startsWith(binaries.binDir))) continue;
+      await binaries.install(name, (payload) => tell(name, payload));
+      manager.applySettings();
+    } catch {
+      // Offline, or the release moved. Nothing that was working has broken.
+    }
+  }
+
+  settings.set('helpersCheckedAt', Date.now());
+  if (win && !win.isDestroyed()) win.webContents.send('tools:progress', { done: true });
 }
 
 /** The version of the extension sitting in this build's resources. */
@@ -342,7 +382,17 @@ function registerIpc() {
   ipcMain.handle('tools:installYtDlp', async () => {
     try {
       const r = await binaries.installYtDlp((p) => {
-        if (win && !win.isDestroyed()) win.webContents.send('tools:progress', p);
+        if (win && !win.isDestroyed()) win.webContents.send('tools:progress', { ...p, name: 'yt-dlp' });
+      });
+      manager.applySettings();
+      return ok(r);
+    } catch (err) { return bad(err); }
+  });
+
+  ipcMain.handle('tools:installFfmpeg', async () => {
+    try {
+      const r = await binaries.install('ffmpeg', (p) => {
+        if (win && !win.isDestroyed()) win.webContents.send('tools:progress', { ...p, name: 'ffmpeg' });
       });
       manager.applySettings();
       return ok(r);
@@ -576,6 +626,12 @@ if (!gotLock) {
     }).catch((err) => ({ state: 'failed', error: err.message }));
 
     updater.startBackgroundChecks();
+
+    // Shortly after launch, so it never competes with the window appearing.
+    setTimeout(() => {
+      const last = Number(settings.get('helpersCheckedAt', 0)) || 0;
+      ensureHelpers({ refresh: Date.now() - last > HELPER_REFRESH_MS }).catch(() => {});
+    }, 4000).unref?.();
 
     // A link handed to Fletch on the command line at first launch.
     const link = linkFromArgv(process.argv);

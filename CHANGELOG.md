@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.7
+
+- The grabber downloads the video you are watching. On a YouTube watch page it
+  could download one from the sidebar instead: it looked for a link near the
+  player, and a few levels up from a player sits a container holding the whole
+  list of what is queued next. It took the first link it found there. That is
+  a worse failure than not working at all — it succeeds, confidently, at the
+  wrong thing. The address bar now wins on any page that is already about one
+  video, and a link is only used where there is exactly one to choose from.
+- A magnet link reaches Windows when Fletch is closed. The add-on was
+  intercepting the click and, finding Fletch not running, swallowing it — so
+  nothing happened at all, where without the add-on Windows would have started
+  Fletch through the magnet handler it registers. Intercepting a link is only
+  worth doing while it leads somewhere better; when it does not, the link is
+  handed back.
+- yt-dlp and ffmpeg install themselves. Fletch fetches both shortly after it
+  first runs and refreshes them weekly, each checked against the checksum its
+  own project publishes and discarded if it does not match. Anything already
+  on PATH is left alone — it belongs to whoever put it there. Turn the whole
+  thing off in Settings → Helpers.
+
 ## 1.2.6
 
 - The first-run walkthrough actually appears now. It was pushed from the main

@@ -203,9 +203,12 @@ git tag v1.0.1 && git push origin v1.0.1
 
 ## Privacy
 
-Fletch makes no network request you did not ask for. No analytics, no update
-ping you cannot turn off, no crash reporting, no account. Full detail in
-[docs/PRIVACY.md](docs/PRIVACY.md).
+Fletch makes no network request that is not part of doing its job, and every
+one can be switched off. No analytics, no crash reporting, no account, no
+update ping you cannot turn off. It also fetches its two helpers, yt-dlp and
+ffmpeg, shortly after first run and refreshes them weekly — checked against
+their projects' published checksums, and switchable in **Settings → Helpers**.
+Full detail in [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ---
 
