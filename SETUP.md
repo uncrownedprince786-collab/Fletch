@@ -12,7 +12,9 @@ you start it. This page is the same thing in writing.
 
 ## 1. Installing
 
-Run **`Fletch-Setup-1.0.2-x64.exe`** and accept the Windows admin prompt.
+Download the latest **`Fletch-Setup-*-x64.exe`** from
+[Releases](https://github.com/uncrownedprince786-collab/Fletch/releases/latest),
+run it, and accept the Windows admin prompt.
 
 Every program that installs into `C:\Program Files` asks for that prompt —
 IDM included. It is what lets the installer put Fletch somewhere all users
