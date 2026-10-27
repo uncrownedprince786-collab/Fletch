@@ -65,6 +65,10 @@ class DownloadManager extends EventEmitter {
 
     // The UI only needs a steady pulse, not an event per chunk.
     this._pulse = setInterval(() => this._flush(), 400);
+    // Electron keeps the main process alive by itself, so this timer never
+    // needs to. Left referenced it is the one handle that stops a plain node
+    // process exiting, which makes the manager awkward to test.
+    this._pulse.unref?.();
 
     this.sweep().catch(() => { /* tidying is never worth failing startup over */ });
   }
@@ -240,6 +244,9 @@ class DownloadManager extends EventEmitter {
       parts: [],
       partIndex: 0,
       headers: opts.headers || {},
+      // Kept, not just acted on: a failure later needs to know this started
+      // life as a page rather than a direct link.
+      forceVideo: Boolean(opts.forceVideo),
       maxHeight: opts.maxHeight || Number(this.settings.get('maxHeight', 0)) || 0,
       audioOnly: Boolean(opts.audioOnly),
       autoStart: opts.autoStart !== false,
@@ -885,6 +892,39 @@ class DownloadManager extends EventEmitter {
     this._touch(task);
     this._persist();
     this.emit('failed', task);
+    this._blameMissingHelper(task);
+  }
+
+  /**
+   * Say when a failure is really a missing helper.
+   *
+   * A media URL scraped off a page is a borrowed thing — signed, short-lived,
+   * often tied to the session that was playing it — and when it stops working
+   * the download looks broken. It is not: it is the case yt-dlp exists to
+   * handle, by asking the site for a URL of its own instead. Without yt-dlp
+   * installed there is nothing to fall back to, and the user is left reading a
+   * network error that tells them nothing they can act on.
+   *
+   * Runs after the failure is already reported, so the task fails at the usual
+   * moment and simply gains a sentence once the check comes back.
+   */
+  async _blameMissingHelper(task) {
+    if (!task || task.state !== 'error') return;
+    // Only for something that came from a page: a plain link that is dead is
+    // dead, and yt-dlp would not have saved it.
+    const fromPage = Boolean((task.headers && task.headers.Referer) || task.forceVideo);
+    if (!fromPage) return;
+    try {
+      if (await this.binaries.resolve('yt-dlp')) return;
+    } catch {
+      return; // cannot tell; say nothing rather than guess
+    }
+    if (task.state !== 'error') return; // retried or cleared while we looked
+    task.error = `${task.error} This came from a web page, and yt-dlp is not installed — `
+      + 'without it Fletch can only try the address the page was using, which sites expire. '
+      + 'Add it from Settings → Helpers and try again.';
+    this._touch(task);
+    this._persist();
   }
 
   // ---- controls ------------------------------------------------------------

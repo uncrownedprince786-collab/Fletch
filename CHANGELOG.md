@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.5
+
+- Setup now offers to install yt-dlp. A page is not a file, and without that
+  helper every link to one fails — but it was offered nowhere except a card in
+  Settings that nobody had a reason to open, so the common case was a working
+  Fletch that appeared to be broken.
+- A download that fails after coming from a web page now says when yt-dlp is
+  the reason. The address an add-on scrapes off a page is borrowed: signed,
+  short-lived, usually tied to the session that was playing it. When it
+  expires the download looks broken, and the network error underneath explains
+  nothing anyone can act on. Fletch now adds what is actually wrong and where
+  to fix it, while keeping the original error.
+- The manager's heartbeat no longer holds a process open on its own. Electron
+  keeps the app alive by itself, and that one timer was the handle standing
+  between the manager and being testable outside it.
+
 ## 1.2.4
 
 - Installing an update always leaves the browser holding the add-on from the

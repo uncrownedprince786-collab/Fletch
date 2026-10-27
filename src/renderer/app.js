@@ -815,6 +815,55 @@ function setupDialog(info) {
     };
     c.appendChild(copy);
 
+    // Pages are not files, and the helper that turns one into the other was
+    // offered nowhere but a Settings card nobody had a reason to open. Missing
+    // it does not look like a missing helper — it looks like downloads being
+    // broken — so it is put in front of people once, here, while they are
+    // already setting things up.
+    const more = el('div');
+    more.style.cssText = 'margin-top:20px;padding-top:16px;border-top:1px solid var(--line-soft)';
+
+    const moreTitle = el('div', null, 'One more thing — video from web pages');
+    moreTitle.style.cssText = 'font-weight:620;font-size:13.5px;margin-bottom:6px';
+    more.appendChild(moreTitle);
+
+    more.appendChild(el('p', null,
+      'A page is not a file, so Fletch uses yt-dlp to find the video on one. '
+      + 'It comes from yt-dlp’s official release and is checked against their published '
+      + 'checksum before it is kept. Without it, links to pages fail in a way that looks '
+      + 'like a broken download rather than a missing helper.'));
+
+    const toolRow = el('div');
+    toolRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:10px';
+    const toolBtn = el('button', 'btn primary', 'Install yt-dlp');
+    const toolState = el('span');
+    toolState.style.cssText = 'font-size:12px;color:var(--text-dim)';
+    toolRow.appendChild(toolBtn);
+    toolRow.appendChild(toolState);
+    more.appendChild(toolRow);
+    c.appendChild(more);
+
+    const paintTool = (st) => {
+      const have = Boolean(st && st.ytdlp && st.ytdlp.installed);
+      toolBtn.hidden = have;
+      toolState.textContent = have
+        ? 'Installed. Links to pages will work.'
+        : 'Not installed. About 23 MB.';
+    };
+    fletch.tools.status().then((r) => { if (r.ok) paintTool(r.data); });
+    toolBtn.onclick = async () => {
+      toolBtn.disabled = true;
+      toolState.textContent = 'Fetching…';
+      const r = await fletch.tools.installYtDlp();
+      toolBtn.disabled = false;
+      if (!r.ok) {
+        toolState.textContent = r.error || 'That did not work. Settings → Helpers has another go.';
+        return;
+      }
+      const after = await fletch.tools.status();
+      if (after.ok) paintTool(after.data);
+    };
+
     const note = el('p');
     note.style.cssText = 'margin-top:16px;font-size:11.5px;color:var(--text-dim);line-height:1.6';
     note.textContent = 'You can reopen this any time from Settings → Browser. '

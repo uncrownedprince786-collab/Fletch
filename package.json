@@ -1,7 +1,7 @@
 {
   "name": "fletch",
   "productName": "Fletch",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "A fast, free download manager: multi-connection acceleration, video extraction from 1800+ sites, and torrents. No licence key, no subscription.",
   "main": "src/main/main.js",
   "license": "MIT",
