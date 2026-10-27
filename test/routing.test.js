@@ -18,9 +18,26 @@ const { scrapePage, candidates } = require('../src/main/engine/scrape.js');
 
 const BODY = crypto.randomBytes(1024 * 1024);
 let rangedRejections = 0;
+let rangedRefusals = 0;
 
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
+
+  // Advertises Accept-Ranges, then refuses any actual ranged request. Links
+  // signed for one IP often behave exactly like this.
+  if (url === '/liar.mp4') {
+    if (req.headers.range) {
+      rangedRefusals++;
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      return res.end('Forbidden');
+    }
+    res.writeHead(200, {
+      'Content-Type': 'video/mp4',
+      'Content-Length': String(BODY.length),
+      'Accept-Ranges': 'bytes',
+    });
+    return res.end(BODY);
+  }
 
   // A file host that refuses ranged requests but serves the file happily.
   if (url === '/grumpy.mp4') {
@@ -101,6 +118,20 @@ server.listen(0, '127.0.0.1', async () => {
     check(!/unsupported|yt-dlp/i.test(t.error || ''),
       `no "unsupported URL" for a plain file link (${t.error || 'no error'})`);
     check(t.filename === 'silent.mp4', `named from the URL (${t.filename})`);
+
+    // ---- a host that advertises ranges and then refuses them ----
+    const liar = await mgr.add(`${base}/liar.mp4`);
+    const t2 = Date.now();
+    while (Date.now() - t2 < 60000 && liar.state !== 'done' && liar.state !== 'error') await wait(100);
+    check(liar.state === 'done',
+      `a server that refuses ranged requests still yields the file (${liar.state}${liar.error ? ': ' + liar.error : ''})`);
+    check(rangedRefusals > 0, `it did refuse the ranged request (${rangedRefusals} times)`);
+    if (liar.state === 'done') {
+      const got = fs.readFileSync(liar.filePath);
+      check(got.length === BODY.length && got.equals(BODY), 'and the file is byte-for-byte correct');
+    }
+    check(/one stream/i.test(liar.warning || ''),
+      `the user is told why it is slower (${liar.warning || 'nothing said'})`);
 
     // ---- a real page still goes down the video path ----
     const page = await mgr.add(`${base}/player.html`);

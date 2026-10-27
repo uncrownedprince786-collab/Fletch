@@ -144,6 +144,23 @@ class HttpDownload extends EventEmitter {
 
     try {
       await this._pump();
+
+      // The server refused to serve byte ranges. Splitting the file was only
+      // ever an optimisation, so start again as a single stream, which is the
+      // one thing it will give us.
+      if (this._stopReason === 'restart-single') {
+        this.emit('warning',
+          'This server will not serve the file in pieces, so Fletch is fetching it in one stream.');
+        this._stopReason = null;
+        this._needsSingleStream = false;
+        this.acceptRanges = false;
+        this.downloaded = 0;
+        this.meter.reset();
+        await this._cleanupPart();
+        await this._prepareFile();
+        this.lastByteAt = Date.now();
+        await this._pump();
+      }
     } finally {
       clearInterval(this._tick);
       this._tick = null;
@@ -290,6 +307,15 @@ class HttpDownload extends EventEmitter {
       } catch (err) {
         if (this._stopReason) { seg.state = 'pending'; return; }
 
+        if (err.rangeRefused && this.acceptRanges) {
+          // Stop the whole pool; _run restarts the download in one stream.
+          this._needsSingleStream = true;
+          this._stopReason = 'restart-single';
+          this._abortAll();
+          seg.state = 'pending';
+          return;
+        }
+
         if (err.throttle) {
           // Give the slot back rather than retrying into the same wall: the
           // range returns to the queue and the pool runs one socket narrower.
@@ -353,6 +379,19 @@ class HttpDownload extends EventEmitter {
             res.destroy();
             return finish(new Error('Server ignored the byte range on resume'));
           }
+          // Some hosts advertise Accept-Ranges and then refuse an actual
+          // ranged request, often because the link is tied to one IP or a
+          // signature that does not cover the Range header. Splitting the
+          // file is an optimisation, not a requirement, so say so and let the
+          // download fall back to a single stream rather than failing.
+          if ((code === 403 || code === 416) && wantsRange) {
+            res.resume();
+            res.destroy();
+            const err = new Error(`HTTP ${code} on a ranged request`);
+            err.rangeRefused = true;
+            return finish(err);
+          }
+
           if (THROTTLE_CODES.has(code)) {
             const retryAfter = parseRetryAfter(res.headers['retry-after']);
             res.resume();

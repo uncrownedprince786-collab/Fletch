@@ -198,20 +198,62 @@ function schedule() {
 
 // ---------------------------------------------------------------- actions
 
+// Permalink shapes for the feeds where the address bar says nothing useful.
+const PERMALINK = [
+  'a[href*="/status/"]',          // X / Twitter
+  'a[href*="/reel/"]',            // Instagram, Facebook
+  'a[href*="/p/"]',               // Instagram posts
+  'a[href*="/videos/"]',
+  'a[href*="/video/"]',
+  'a[href*="/watch"]',            // Facebook, YouTube
+  'a[href*="/posts/"]',
+].join(',');
+
+/**
+ * The address of the post this video belongs to.
+ *
+ * On a feed, location.href is the feed — x.com/home tells an extractor
+ * nothing, and it ends up following a redirect to a login page. The post's
+ * own permalink is almost always sitting next to the video.
+ */
+function permalinkFor(video) {
+  let node = video;
+  for (let depth = 0; node && depth < 12; depth++) {
+    const link = node.querySelector ? node.querySelector(PERMALINK) : null;
+    if (link && link.href && /^https?:/i.test(link.href)) return link.href;
+    node = node.parentElement;
+  }
+  return '';
+}
+
+/** A feed or app shell, where the current URL names no particular video. */
+function isFeedUrl(href) {
+  return /^https?:\/\/[^/]*(x\.com|twitter\.com)\/(home|explore|i\/|search|notifications)?$/i.test(href)
+    || /\/(home|feed|explore|reels|for-you)\/?$/i.test(href)
+    || /^https?:\/\/[^/]+\/?$/i.test(href);
+}
+
 function grab() {
   const video = tracked;
   label.textContent = 'Sending…';
 
   // A direct file src is worth sending as-is; a blob: or MSE source is not,
-  // so the page URL goes instead and the app's extractor works it out.
+  // so a page URL goes instead and the app's extractor works it out.
   const src = video && video.currentSrc ? video.currentSrc : '';
   const direct = /^https?:\/\//i.test(src) && !/\.m3u8|\.mpd/i.test(src);
+
+  // Prefer the post's own permalink over whatever the address bar happens to
+  // be showing, which on a feed is not this video at all.
+  const permalink = permalinkFor(video);
+  const pageUrl = (permalink && (isFeedUrl(location.href) || permalink !== location.href))
+    ? permalink
+    : location.href;
 
   chrome.runtime.sendMessage({
     type: 'grab-video',
     payload: direct
       ? { url: src, headers: { Referer: location.href } }
-      : { url: location.href, forceVideo: true },
+      : { url: pageUrl, forceVideo: true },
   }, (reply) => {
     label.textContent = 'Download this video';
     if (reply && reply.ok) toast('Sent to Fletch.');

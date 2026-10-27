@@ -436,6 +436,25 @@ class DownloadManager extends EventEmitter {
       if (!bin) {
         throw new Error('This link is a web page. Fletch found no media on it, and the yt-dlp helper is not installed — add it from Settings to cover far more sites.');
       }
+
+      // Being bounced to a sign-in or onboarding page is a specific, common
+      // failure, and "Unsupported URL" is a misleading way to report it.
+      const message = (extractError && extractError.message) || '';
+      if (/login|signin|sign-in|onboarding|redirect_after_login|consent|age.?gate|private/i.test(message)) {
+        const using = this.settings.get('cookiesFromBrowser', '');
+        throw new Error(
+          using
+            ? `That page wants you signed in, and the ${using} cookies Fletch is using were not accepted. Close ${using} and try again, or open the post directly rather than from a feed.`
+            : 'That page wants you signed in. Turn on Settings → Browser → "Sign in as you, using your browser’s cookies", then try again.'
+        );
+      }
+      if (/unsupported url/i.test(message)) {
+        throw new Error(
+          `No video was found at that address. ${/\/(home|explore|feed)\b/i.test(task.url)
+            ? 'It points at a feed rather than a particular post — open the post itself and try again.'
+            : 'The site may need you signed in, or may not expose a downloadable stream.'}`
+        );
+      }
       throw extractError || new Error('No downloadable video was found on that page.');
     }
 
