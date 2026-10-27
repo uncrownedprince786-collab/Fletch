@@ -10,12 +10,27 @@ you start it. This page is the same thing in writing.
 
 ---
 
-## 1. The app
+## 1. Installing
+
+Run **`Fletch-Setup-1.0.2-x64.exe`** and accept the Windows admin prompt.
+
+Every program that installs into `C:\Program Files` asks for that prompt —
+IDM included. It is what lets the installer put Fletch somewhere all users
+share, and register magnet links system-wide. The alternative, installing into
+your own AppData, is what the earlier build did and is why magnet links broke
+when that folder moved.
+
+SmartScreen will also warn, because the build is unsigned: **More info → Run
+anyway**. A signing certificate is a yearly cost this project does not have.
+
+> **Remove the old copy first.** An earlier build installed itself to
+> `C:\Users\NEW TECH\AppData\Local\Programs\Fletch`. Uninstall it from
+> **Windows Settings → Apps → Fletch**, or you will have two.
 
 | | |
 |---|---|
 | **Start it** | Desktop shortcut **Fletch**, or the Start menu |
-| **Installed at** | `C:\Users\NEW TECH\AppData\Local\Programs\Fletch` |
+| **Installed at** | `C:\Program Files\Fletch` |
 | **Saves downloads to** | `C:\Users\NEW TECH\Downloads\Fletch` (change in Settings → General) |
 | **Settings live in** | `C:\Users\NEW TECH\AppData\Roaming\Fletch` |
 
@@ -38,7 +53,7 @@ the right page, and **Copy token** fills your clipboard. Or by hand:
 1. Open **`chrome://extensions`** (or `edge://extensions`).
 2. Turn on **Developer mode**, top right.
 3. **Load unpacked** → pick:
-   `C:\Users\NEW TECH\AppData\Local\Programs\Fletch\resources\extension`
+   `C:\Program Files\Fletch\resources\extension`
 4. On the **Fletch Capture** card: **Details → Extension options**.
 5. Port `47809`, and the token from **Fletch → Settings → Browser**.
 6. **Save and test** → *Paired. You are ready to capture.*
@@ -48,6 +63,38 @@ the right page, and **Copy token** fills your clipboard. Or by hand:
 
 The extension talks only to `127.0.0.1`. The token stops any other page on your
 machine from queueing downloads through it.
+
+### Why doesn't the installer add it for me?
+
+Because Chrome will not let it. Since Chrome 33, an extension that is not on
+the Chrome Web Store cannot be installed by an outside program — not through
+the registry, not from a `.crx`, not by any route short of a machine-wide
+enterprise policy, which would stamp "Managed by your organization" across
+every browser on the computer. Fletch will not do that to you.
+
+IDM is in exactly the same position and solves it the same way: **its extension
+is published on the Chrome Web Store.** Once Fletch Capture is published there
+too, the installer can add it automatically and this step disappears.
+
+Everything needed for that is ready — run `npm run pack:extension` and follow
+[docs/EXTENSION.md](docs/EXTENSION.md). It is a one-off job: $5, a form, and a
+few days of review.
+
+Until then the first-run panel gets you as close as the browser permits: it
+opens the right page and puts the token on your clipboard, leaving one
+**Load unpacked** click.
+
+---
+
+## Magnet links
+
+Clicking a magnet link anywhere on your system opens Fletch and starts the
+torrent. The installer registers this for all users.
+
+If magnets were pointing at an older copy of Fletch, this version repairs that
+on launch — but only when the association names a Fletch. Another torrent
+client's setting is left alone. To hand magnets back to a different client,
+set it in **Windows Settings → Apps → Default apps**.
 
 ---
 
