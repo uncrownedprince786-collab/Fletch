@@ -26,6 +26,33 @@ function extensionIdFrom(origin) {
   return m ? m[1].toLowerCase() : null;
 }
 
+/**
+ * Decide whether a request really came from the Fletch extension.
+ *
+ * Chrome does not reliably put an Origin on a fetch made from an extension's
+ * service worker — with host permissions there is no CORS to satisfy, so the
+ * header is often simply absent. Requiring it meant the extension could never
+ * pair, while curl, which sends it, worked perfectly.
+ *
+ * The rule that holds either way: a browser ALWAYS sets Origin on a page's
+ * cross-origin request. So an Origin naming a web site is a page and is
+ * refused outright, and a request with no Origin cannot be a page at all —
+ * for those, the extension names itself in a header instead.
+ */
+function identifyCaller(req) {
+  const origin = String(req.headers.origin || '').trim();
+
+  if (origin) {
+    const id = extensionIdFrom(origin);
+    if (id) return { kind: 'extension', id, origin };
+    return { kind: 'web', origin }; // a page; never trusted
+  }
+
+  const claimed = String(req.headers['x-fletch-extension'] || '').trim().toLowerCase();
+  if (/^[a-p]{32}$/.test(claimed)) return { kind: 'extension', id: claimed, origin: '' };
+  return { kind: 'unknown', origin: '' };
+}
+
 class Bridge {
   constructor(opts) {
     this.manager = opts.manager;
@@ -55,8 +82,8 @@ class Bridge {
   }
 
   _trustedExtension(req) {
-    const id = extensionIdFrom(req.headers.origin);
-    return Boolean(id && TRUSTED_EXTENSIONS.has(id));
+    const who = identifyCaller(req);
+    return who.kind === 'extension' && TRUSTED_EXTENSIONS.has(who.id);
   }
 
   _send(res, code, payload, origin) {

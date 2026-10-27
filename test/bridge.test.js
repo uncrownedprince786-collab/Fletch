@@ -113,6 +113,55 @@ function call(port, pathname, { method = 'GET', headers = {}, body } = {}) {
     });
     check(pageTrying.status === 401, 'a web page may not queue, even naming itself');
 
+    // --- identifying the extension when Chrome sends no Origin ---
+    // This is the case that actually happens: a fetch from an extension
+    // service worker often carries no Origin at all, and requiring one meant
+    // the extension could never pair while curl, which sends it, worked.
+    const headerOnly = await call(port, '/pair', { headers: { 'X-Fletch-Extension': EXTENSION } });
+    check(headerOnly.status === 200 && headerOnly.json.token === bridge.token,
+      'an extension naming itself, with no Origin, can pair');
+
+    const headerQueue = await call(port, '/add', {
+      method: 'POST',
+      headers: { 'X-Fletch-Extension': EXTENSION },
+      body: { url: 'https://example.com/f.mp4', show: false },
+    });
+    check(headerQueue.status === 200, 'and can queue');
+
+    const wrongHeader = await call(port, '/pair', {
+      headers: { 'X-Fletch-Extension': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    });
+    check(wrongHeader.status === 403, 'a different extension id in that header is refused');
+
+    const junkHeader = await call(port, '/pair', { headers: { 'X-Fletch-Extension': 'not-an-id' } });
+    check(junkHeader.status === 403, 'a malformed id is refused');
+
+    // The important one: a page must not get in by setting the header itself.
+    // A browser always puts an Origin on a page's cross-origin request, so an
+    // http(s) Origin is conclusive regardless of what else is claimed.
+    const pageWithHeader = await call(port, '/pair', {
+      headers: { Origin: 'https://evil.example', 'X-Fletch-Extension': EXTENSION },
+    });
+    check(pageWithHeader.status === 403,
+      'a web page claiming the extension id is still refused');
+
+    const pageQueueWithHeader = await call(port, '/add', {
+      method: 'POST',
+      headers: { Origin: 'https://evil.example', 'X-Fletch-Extension': EXTENSION },
+      body: { url: 'https://evil.example/g.mp4', show: false },
+    });
+    check(pageQueueWithHeader.status === 401,
+      'and cannot queue that way either');
+
+    // ...and it could not even send the header: the preflight does not allow it.
+    const preflight = await call(port, '/add', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://evil.example', 'Access-Control-Request-Headers': 'x-fletch-extension' },
+    });
+    const allowed = String(preflight.headers['access-control-allow-headers'] || '').toLowerCase();
+    check(!allowed.includes('x-fletch-extension'),
+      `the preflight refuses that header to a page (allows: ${allowed || 'nothing'})`);
+
     const wrongToken = await call(port, '/add', {
       method: 'POST',
       headers: { Authorization: `Bearer ${'0'.repeat(bridge.token.length)}` },
@@ -120,8 +169,8 @@ function call(port, pathname, { method = 'GET', headers = {}, body } = {}) {
     });
     check(wrongToken.status === 401, 'a wrong token is refused');
 
-    check(queued.length === 2 && queued.every((u) => /example\.com/.test(u)),
-      `only the authorised requests reached the queue (${queued.length} of 5)`);
+    check(queued.every((u) => /^https:\/\/example\.com\//.test(u)),
+      `only authorised requests reached the queue (${queued.length}, none from evil.example)`);
   } catch (err) {
     console.error('ERROR:', err.stack || err.message);
     failed++;

@@ -12,6 +12,10 @@ const MEDIA_TYPE_RE = /^(video|audio)\//i;
 // Per-tab list of media URLs we have seen fly past, newest first.
 const seen = new Map();
 
+// Why the last send failed, so the page can say something true rather than
+// blaming the app for being closed when it was actually the app that refused.
+let lastSendError = '';
+
 function config() {
   return new Promise((resolve) => chrome.storage.local.get(DEFAULTS, resolve));
 }
@@ -23,11 +27,18 @@ function config() {
  * fixed by the public key in the manifest, and hands over the token on
  * request. Copying it across by hand is only a fallback now.
  */
+// Chrome does not reliably attach an Origin to a fetch from a service worker,
+// so the extension names itself here instead. A web page cannot set this
+// header on a cross-origin request without a preflight the app refuses.
+function identityHeaders() {
+  return { 'X-Fletch-Extension': chrome.runtime.id };
+}
+
 async function ensurePaired(force = false) {
   const { port, token } = await config();
   if (token && !force) return token;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/pair`);
+    const res = await fetch(`http://127.0.0.1:${port}/pair`, { headers: identityHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.token) return null;
@@ -46,6 +57,7 @@ async function send(payload, quiet = false) {
   const port = cfg.port;
   const token = cfg.token || await ensurePaired();
   if (!token) {
+    lastSendError = 'not paired with Fletch';
     if (!quiet) {
       notify('Fletch is not running',
         'Start Fletch and try again. It pairs with this extension by itself.');
@@ -55,7 +67,11 @@ async function send(payload, quiet = false) {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/add`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...identityHeaders(),
+      },
       body: JSON.stringify(payload),
     });
     if (res.status === 401) {
@@ -66,12 +82,20 @@ async function send(payload, quiet = false) {
       if (!quiet) notify('Fletch would not accept this', 'Try restarting Fletch.');
       return null;
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error || ''; } catch { /* no body */ }
+      lastSendError = detail || `Fletch refused it (HTTP ${res.status})`;
+      if (!quiet) notify('Fletch could not take that', lastSendError);
+      return null;
+    }
+    lastSendError = '';
     const data = await res.json();
     const n = (data.added || []).length;
     if (!quiet) notify('Sent to Fletch', n === 1 ? (data.added[0].title || 'Queued.') : `${n} links queued.`);
     return data;
-  } catch {
+  } catch (err) {
+    lastSendError = 'Fletch is not running';
     if (!quiet) notify('Could not reach Fletch', 'Make sure the Fletch app is running, then try again.');
     return null;
   }
@@ -232,7 +256,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   // From the in-page grabber button and the magnet-link handler. Quiet: the
   // content script shows its own feedback in the corner of the page.
   if (msg.type === 'grab-video' || msg.type === 'grab-magnet') {
-    send({ ...msg.payload, show: false }, true).then((r) => reply({ ok: Boolean(r) }));
+    lastSendError = '';
+    send({ ...msg.payload, show: false }, true)
+      .then((r) => reply({ ok: Boolean(r), reason: r ? '' : lastSendError }));
     return true;
   }
   if (msg.type === 'ping') {

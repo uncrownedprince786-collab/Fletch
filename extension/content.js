@@ -215,7 +215,7 @@ function grab() {
   }, (reply) => {
     label.textContent = 'Download this video';
     if (reply && reply.ok) toast('Sent to Fletch.');
-    else toast('Could not reach Fletch — is it running?');
+    else toast(reply && reply.reason ? reply.reason : 'Could not reach Fletch — is it running?');
   });
 }
 
@@ -237,7 +237,7 @@ document.addEventListener('click', (e) => {
     payload: { url: link.href },
   }, (reply) => {
     if (reply && reply.ok) toast('Torrent sent to Fletch.');
-    else toast('Could not reach Fletch — is it running?');
+    else toast(reply && reply.reason ? reply.reason : 'Could not reach Fletch — is it running?');
   });
 }, true);
 
