@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.2.2
+
+- A withdrawn version can now be stopped. Fletch reads a small policy file
+  published beside the source, and a copy below the version it names is held
+  behind a screen it cannot be dismissed from: the reason, the replacement,
+  and a button to install it. Fletch fetches that replacement without asking,
+  because the question is not worth putting. Turning automatic updates off
+  does not waive this — that setting is about convenience, not about keeping a
+  version that was recalled. A policy file that is missing, corrupt or
+  unreachable holds nobody back.
+- A copy that cannot replace itself — a portable build, or one run from source
+  — no longer sends the user off to a web page to find the installer. It
+  downloads the installer with the download manager it already is, and opens
+  it the moment it lands. If that download fails, the screen says so and
+  offers to try again rather than sitting on "Downloading" forever.
+- The extension names its version on every call it makes to the app, so Fletch
+  can tell when the browser is still holding an old copy of it — updating the
+  app does not reload what the browser has — and says to reload it.
+- The browser extension no longer re-downloads your download history. Chrome
+  replays `downloads.onCreated` for every item already in its list when it
+  starts, and the takeover read each replayed record as a download beginning
+  now: it erased the history entry and fetched the file over again. One cold
+  boot could pull down months of history. The takeover now acts only on a
+  download that is actually running and started moments ago.
+- With Fletch closed, the extension leaves the browser's own downloads alone.
+  It used to cancel each one, fail to reach the app, and start it again in
+  Chrome.
+- What was handed back to Chrome is remembered in session storage rather than
+  in a variable the service worker loses when it is stopped, and is matched on
+  the redirected URL as well as the original, so a hand-back cannot be caught
+  and handed back without end.
+
 ## 1.0.3
 
 - macOS builds now work. The hand-written `.icns` was rejected during

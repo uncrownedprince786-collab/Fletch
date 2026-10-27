@@ -49,6 +49,8 @@ let tasksStore = null;
 let binaries = null;
 let quitting = false;
 let updater = null;
+// The task id of a replacement installer this copy is fetching for itself.
+let pendingInstaller = null;
 let magnetState = { state: 'unknown' };
 let lastClipboard = '';
 let clipboardTimer = null;
@@ -410,6 +412,24 @@ function registerIpc() {
     try { await updater.download(); return ok(updater.status()); }
     catch (err) { return bad(err); }
   });
+  // A portable copy, or one run from source, cannot replace itself in place.
+  // It can still fetch its own replacement rather than sending the user off to
+  // a web page to find it — this is a download manager, after all — and open
+  // the installer the moment it lands.
+  ipcMain.handle('update:fetchInstaller', async () => {
+    const url = updater.installerUrl;
+    if (!url) return bad(new Error('No installer has been published for that version yet.'));
+    try {
+      const task = await manager.add(url, {});
+      pendingInstaller = task.id;
+      updater.markInstaller('fetching');
+      return ok({ id: task.id });
+    } catch (err) {
+      updater.markInstaller('failed', err.message);
+      return bad(err);
+    }
+  });
+
   ipcMain.handle('update:install', () => {
     try { updater.install(); return ok(); }
     catch (err) { return bad(err); }
@@ -458,6 +478,14 @@ if (!gotLock) {
     });
 
     manager.on('completed', (task) => {
+      // The replacement this copy asked for: run it rather than leaving it in
+      // the folder for the user to go and find.
+      if (pendingInstaller && task.id === pendingInstaller) {
+        pendingInstaller = null;
+        updater.markInstaller('');
+        shell.openPath(task.filePath);
+        return;
+      }
       if (!settings.get('notifyOnFinish', true)) return;
       if (!Notification.isSupported()) return;
       const n = new Notification({ title: 'Download finished', body: task.filename || task.title });
@@ -466,11 +494,18 @@ if (!gotLock) {
     });
 
     manager.on('failed', (task) => {
+      // The replacement never arrived. Say so on the update screen, which is
+      // the only thing the user can see while it is up.
+      if (pendingInstaller && task.id === pendingInstaller) {
+        pendingInstaller = null;
+        updater.markInstaller('failed', task.error || 'The installer did not download.');
+        return;
+      }
       if (!settings.get('notifyOnFinish', true) || !Notification.isSupported()) return;
       new Notification({ title: 'Download failed', body: `${task.title}\n${task.error}` }).show();
     });
 
-    updater = new Updater({ app, settings });
+    updater = new Updater({ app, settings, policyUrl: process.env.FLETCH_POLICY_URL || '' });
     updater.on('status', (s) => {
       if (win && !win.isDestroyed()) win.webContents.send('update:status', s);
       // Only interrupt for something the user can act on.
@@ -493,6 +528,9 @@ if (!gotLock) {
       manager,
       settings,
       onActivate: showWindow,
+      onExtension: (version) => {
+        if (updater) updater.noteExtension(version);
+      },
       onPaired: () => {
         // The extension has introduced itself, so the setup panel has served
         // its purpose and should stop appearing.

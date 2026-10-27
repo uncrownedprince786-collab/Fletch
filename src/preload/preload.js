@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('fletch', {
     status: () => call('update:status'),
     check: () => call('update:check'),
     download: () => call('update:download'),
+    fetchInstaller: () => call('update:fetchInstaller'),
     install: () => call('update:install'),
   },
   onUpdateStatus: (fn) => on('update:status', fn),

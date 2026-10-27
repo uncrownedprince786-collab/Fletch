@@ -59,6 +59,8 @@ class Bridge {
     this.settings = opts.settings;
     this.onActivate = opts.onActivate || (() => {});
     this.onPaired = opts.onPaired || (() => {});
+    this.onExtension = opts.onExtension || (() => {});
+    this.extensionVersion = '';
     this.server = null;
     this.port = null;
     this.token = this.settings.get('bridgeToken', '');
@@ -112,7 +114,26 @@ class Bridge {
 
   _handle(req, res) {
     const origin = req.headers.origin;
-    const echo = this._trustedExtension(req) ? origin : undefined;
+    const trusted = this._trustedExtension(req);
+    const echo = trusted ? origin : undefined;
+
+    // The extension names its version on every call it makes. That is the only
+    // way the app can tell that a browser is still running a copy that was
+    // withdrawn — the extension lives in the browser, not in the app, and an
+    // app update does not reach it until it is reloaded.
+    //
+    // X-Fletch-Extension-Version is deliberately absent from the preflight's
+    // allowed headers: the extension has host permissions and needs no
+    // preflight, while a web page would have to ask for one and be refused.
+    // Advertising it would hand a page the means to claim to be the
+    // extension. It is read here, never promised there.
+    if (trusted) {
+      const seen = String(req.headers['x-fletch-extension-version'] || '0.0.0').trim();
+      if (seen !== this.extensionVersion) {
+        this.extensionVersion = seen;
+        this.onExtension(seen);
+      }
+    }
 
     if (req.method === 'OPTIONS') return this._send(res, 204, {}, echo);
 

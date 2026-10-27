@@ -504,11 +504,162 @@ function formatDialog(task) {
 let lastUpdateState = '';
 
 /**
+ * The one screen Fletch will not let you past.
+ *
+ * Every other update is an offer: Fletch asks before spending bandwidth and
+ * asks again before replacing itself. This is the exception, and it exists
+ * because of a version that filled people's Downloads folders — when carrying
+ * on is the harmful option, the choice is no kindness.
+ *
+ * It covers two separate repairs, because the app and the extension are two
+ * separate installations. Updating Fletch leaves the browser holding whatever
+ * copy of the extension it already had, and the extension is the half that
+ * was doing the damage, so the browser has to be sent to reload it. The
+ * policy file in the repository decides what counts as too old; see
+ * src/main/updater.js.
+ */
+function renderForcedUpdate(s) {
+  let box = document.getElementById('forced');
+  const appStale = Boolean(s && s.required);
+  const extStale = Boolean(s && s.extensionOutdated);
+
+  if (!appStale && !extStale) {
+    if (box) box.remove();
+    return;
+  }
+
+  if (!box) {
+    box = el('div');
+    box.id = 'forced';
+    const card = el('div', 'forced-card');
+    card.appendChild(el('h2'));
+    card.appendChild(el('p', 'why'));
+    card.appendChild(el('p', 'vers'));
+
+    const appStep = el('section', 'step app');
+    appStep.appendChild(el('h3'));
+    appStep.appendChild(el('p', 'state'));
+    const appActs = el('div', 'acts');
+    appActs.appendChild(el('button', 'btn primary'));
+    appStep.appendChild(appActs);
+    card.appendChild(appStep);
+
+    const extStep = el('section', 'step ext');
+    extStep.appendChild(el('h3'));
+    extStep.appendChild(el('p', 'lead'));
+    const steps = el('ol');
+    for (const line of [
+      'Open the extensions page.',
+      'Find Fletch Capture in the list.',
+      'Click the reload arrow on its card.',
+    ]) steps.appendChild(el('li', '', line));
+    extStep.appendChild(steps);
+    const extActs = el('div', 'acts');
+    extActs.appendChild(el('button', 'btn primary ext-open', 'Open the extensions page'));
+    extStep.appendChild(extActs);
+    card.appendChild(extStep);
+
+    box.appendChild(card);
+    document.body.appendChild(box);
+
+    box.querySelector('.ext-open').onclick = () => fletch.setup.openExtensionsPage('chrome');
+  }
+
+  const appStep = box.querySelector('.step.app');
+  const extStep = box.querySelector('.step.ext');
+  appStep.hidden = !appStale;
+  extStep.hidden = !extStale;
+
+  box.querySelector('h2').textContent = appStale
+    ? 'Update Fletch to carry on'
+    : 'Reload the Fletch extension';
+
+  box.querySelector('.why').textContent = (s && s.reason)
+    || 'The copy your browser is running has been withdrawn and should not keep working.';
+
+  box.querySelector('.vers').textContent = appStale && s.minimumVersion
+    ? `You are on ${s.current}. Version ${s.minimumVersion} replaces it.`
+    : '';
+
+  // Numbered only when there are two things to do in order.
+  appStep.querySelector('h3').textContent = extStale ? '1. Update the app' : 'Update the app';
+  extStep.querySelector('h3').textContent = appStale
+    ? '2. Reload the browser extension'
+    : 'Reload the browser extension';
+
+  extStep.querySelector('.lead').textContent = appStale
+    ? 'Your browser keeps its own copy of the extension, so installing the update does not change it. Restarting your browser picks up the new one — or do it now:'
+    : 'Your browser is running an older copy of the extension than this version of Fletch expects. Restarting your browser picks up the new one — or do it now:';
+
+  const line = appStep.querySelector('.state');
+  const button = appStep.querySelector('.acts .primary');
+
+  if (!appStale) return;
+
+  if (s.state === 'ready') {
+    line.textContent = 'The new version is downloaded and ready.';
+    button.textContent = 'Restart and install';
+    button.disabled = false;
+    button.onclick = async () => {
+      button.disabled = true;
+      const r = await fletch.update.install();
+      if (!r.ok) { line.textContent = r.error; button.disabled = false; }
+    };
+  } else if (s.state === 'downloading') {
+    line.textContent = `Downloading… ${Math.round((s.progress || 0) * 100)}%`;
+    button.textContent = 'Downloading…';
+    button.disabled = true;
+  } else if (s.usable) {
+    line.textContent = 'Fletch is fetching the new version for you.';
+    button.textContent = 'Download now';
+    button.disabled = false;
+    button.onclick = async () => {
+      button.disabled = true;
+      const r = await fletch.update.download();
+      if (!r.ok) { line.textContent = r.error; button.disabled = false; }
+    };
+  } else if (s.installerUrl) {
+    // A portable copy, or one run from source, cannot swap itself out in
+    // place — but it can fetch its own replacement and open it, which is all
+    // the user wanted from a link to a web page anyway.
+    if (s.installerState === 'fetching') {
+      line.textContent = 'Downloading the installer. It will open by itself when it is ready.';
+      button.textContent = 'Downloading…';
+      button.disabled = true;
+    } else {
+      line.textContent = s.installerError
+        || 'This copy cannot replace itself, so Fletch will download the installer and open it.';
+      button.textContent = s.installerError ? 'Try again' : 'Download and install';
+      button.disabled = false;
+      button.onclick = async () => {
+        button.disabled = true;
+        button.textContent = 'Downloading…';
+        const r = await fletch.update.fetchInstaller();
+        if (!r.ok) {
+          line.textContent = r.error;
+          button.textContent = 'Try again';
+          button.disabled = false;
+        }
+      };
+    }
+  } else {
+    // No installer has been named, so the release page is all there is.
+    line.textContent = 'This copy cannot replace itself. Download the new one and run it instead.';
+    button.textContent = 'Get the new version';
+    button.disabled = false;
+    button.onclick = () => fletch.app.openExternal(s.downloadUrl
+      || 'https://github.com/uncrownedprince786-collab/Fletch/releases/latest');
+  }
+}
+
+/**
  * Updates are announced, never imposed: Fletch asks before spending bandwidth
- * and asks again before replacing itself.
+ * and asks again before replacing itself. The screen above is the one case
+ * that is not an announcement.
  */
 function handleUpdateStatus(s) {
   state.update = s;
+  renderForcedUpdate(s);
   if (!s || s.state === lastUpdateState) return;
   lastUpdateState = s.state;
 
@@ -1008,7 +1159,7 @@ async function boot() {
   fletch.onStats(applyStats);
   fletch.onSetupShow((info) => setupDialog(info));
   fletch.onUpdateStatus(handleUpdateStatus);
-  fletch.update.status().then((r) => { if (r.ok) state.update = r.data; });
+  fletch.update.status().then((r) => { if (r.ok) handleUpdateStatus(r.data); });
 
   fletch.onClipboardLink(({ url, likelyMedia }) => {
     if (state.seenClipboard.has(url)) return;

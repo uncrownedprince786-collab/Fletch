@@ -353,3 +353,42 @@ code.snippet {
 
 .search-ico { color: var(--text-dim); }
 .btn.wide { width: 100%; justify-content: flex-start; }
+
+/* ------------------------------------------------- the update you must take */
+
+/* Sits above every modal (z-index 50) on purpose: nothing should be able to
+   cover it, and nothing closes it but installing the update. */
+#forced {
+  position: fixed; inset: 0; background: rgba(5, 8, 12, .86);
+  backdrop-filter: blur(6px); z-index: 200;
+  /* The scrim itself scrolls, and the card centres with auto margins while
+     there is room. Capping the card's own height instead left its buttons
+     below the bottom of a short window, which is the one thing this screen
+     cannot afford: the button is the only way out of it. */
+  display: flex; align-items: flex-start; justify-content: center;
+  overflow-y: auto; padding: 24px; box-sizing: border-box;
+  animation: fade .14s ease;
+}
+.forced-card {
+  width: min(520px, calc(100vw - 48px));
+  margin: auto 0; flex: none;
+  background: var(--panel); border: 1px solid var(--line);
+  border-top: 3px solid var(--ember-3);
+  border-radius: 16px; box-shadow: var(--shadow);
+  padding: 22px 24px 20px;
+  animation: rise .16s cubic-bezier(.2, .8, .3, 1);
+}
+.forced-card h2 { font-size: 17px; font-weight: 650; margin-bottom: 10px; }
+.forced-card p { font-size: 13px; line-height: 1.55; color: var(--text-dim); margin-bottom: 9px; }
+.forced-card .vers { color: var(--text); }
+.forced-card .state { color: var(--ember-1); }
+.forced-card .vers:empty { display: none; }
+.forced-card .step { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.forced-card .step[hidden] { display: none; }
+.forced-card .step h3 { font-size: 13.5px; font-weight: 620; margin-bottom: 7px; }
+.forced-card .step ol { margin: 8px 0 0 18px; padding: 0; }
+.forced-card .step li {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
+  list-style: decimal; padding-left: 2px;
+}
+.forced-card .acts { display: flex; gap: 9px; margin-top: 13px; }
