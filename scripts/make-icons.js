@@ -230,6 +230,14 @@ fs.writeFileSync(path.join(OUT, 'icon@2x.png'), by[128]);
 fs.writeFileSync(path.join(OUT, 'icon.ico'), encodeIco(pngs.filter((p) => p.size <= 256)));
 fs.writeFileSync(path.join(OUT, 'icon.icns'), encodeIcns(pngs));
 
+// electron-builder generates each platform's icon from a single large PNG in
+// the build-resources folder. Handing it this rather than our own .icns keeps
+// macOS packaging on the well-trodden path, where Apple's own tools do the
+// conversion.
+const BUILD = path.join(__dirname, '..', 'build');
+fs.mkdirSync(BUILD, { recursive: true });
+fs.writeFileSync(path.join(BUILD, 'icon.png'), by[1024]);
+
 // Electron treats any image whose filename ends in "Template" as a macOS
 // template image, so the name here is load-bearing.
 fs.writeFileSync(path.join(OUT, 'trayTemplate.png'), encodePng(renderTrayTemplate(16), 16));

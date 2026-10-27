@@ -74,10 +74,25 @@ jobs:
         run: npm run icons
 
       - name: Build
-        run: npx electron-builder --publish never
+        id: pack
+        shell: bash
+        run: |
+          set -o pipefail
+          npx electron-builder --publish never 2>&1 | tee build-output.txt
         env:
           # No Apple certificate, so skip notarisation rather than fail on it.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Show why the build failed
+        if: failure() && steps.pack.outcome == 'failure'
+        shell: bash
+        run: |
+          {
+            echo "## Build failure on ${{ matrix.label }}"
+            echo '```'
+            tail -60 build-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package the browser extension
         if: matrix.os == 'windows-latest'

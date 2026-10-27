@@ -1,7 +1,7 @@
 {
   "name": "fletch",
   "productName": "Fletch",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A fast, free download manager: multi-connection acceleration, video extraction from 1800+ sites, and torrents. No licence key, no subscription.",
   "main": "src/main/main.js",
   "license": "MIT",
@@ -90,19 +90,18 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
-            "arm64"
+            "arm64",
+            "x64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64",
-            "arm64"
+            "arm64",
+            "x64"
           ]
         }
       ],
-      "icon": "assets/icon.icns",
       "category": "public.app-category.utilities",
       "artifactName": "Fletch-${version}-${arch}.${ext}",
       "darkModeSupport": true,
