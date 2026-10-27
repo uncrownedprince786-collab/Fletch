@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.6
+
+- The first-run walkthrough actually appears now. It was pushed from the main
+  process the moment the bridge came up, which on a quick machine is before
+  the window has finished starting and subscribed to it — so the one screen
+  that explains how to load the browser add-on, and now how to get yt-dlp, was
+  being thrown away silently, and most reliably on the fastest machines. The
+  window asks for it as well as waiting to be told, so the race cannot lose
+  it.
+
 ## 1.2.5
 
 - Setup now offers to install yt-dlp. A page is not a file, and without that

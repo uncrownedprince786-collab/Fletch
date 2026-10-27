@@ -739,7 +739,11 @@ function handleUpdateStatus(s) {
  * Fletch into something that catches downloads, so it gets walked through
  * rather than buried in settings.
  */
+let setupOpen = false;
+
 function setupDialog(info) {
+  if (setupOpen) return;
+  setupOpen = true;
   modal('Set up the browser extension', (c, close) => {
     c.appendChild(el('p', null,
       'One step, and every download you click in your browser comes here instead. '
@@ -870,11 +874,11 @@ function setupDialog(info) {
       + 'Fletch works without the extension too — paste or drop links into the window.';
     c.appendChild(note);
   }, [
-    { label: 'Remind me later', onClick: (close) => close() },
+    { label: 'Remind me later', onClick: (close) => { setupOpen = false; close(); } },
     {
       label: 'Done',
       primary: true,
-      onClick: (close) => { fletch.setup.markDone(); close(); },
+      onClick: (close) => { setupOpen = false; fletch.setup.markDone(); close(); },
     },
   ], true);
 }
@@ -1251,6 +1255,15 @@ async function boot() {
   fletch.onTasks(applyTasks);
   fletch.onStats(applyStats);
   fletch.onSetupShow((info) => setupDialog(info));
+
+  // And ask, as well as waiting to be told. main sends setup:show the moment
+  // the bridge is up, which on a quick machine is before this window has
+  // finished starting and subscribed — so the one message that explains how
+  // to load the add-on was being thrown away, silently, for exactly the
+  // people whose machines start fastest.
+  fletch.setup.info().then((r) => {
+    if (r.ok && r.data && !r.data.done) setupDialog(r.data);
+  });
   fletch.onUpdateStatus(handleUpdateStatus);
   fletch.update.status().then((r) => { if (r.ok) handleUpdateStatus(r.data); });
 
