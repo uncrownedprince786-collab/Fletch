@@ -31,7 +31,12 @@ function config() {
 // so the extension names itself here instead. A web page cannot set this
 // header on a cross-origin request without a preflight the app refuses.
 function identityHeaders() {
-  return { 'X-Fletch-Extension': chrome.runtime.id };
+  return {
+    'X-Fletch-Extension': chrome.runtime.id,
+    // So the app can say when a browser is still running a withdrawn copy of
+    // this extension: updating the app does not reload what the browser holds.
+    'X-Fletch-Extension-Version': chrome.runtime.getManifest().version,
+  };
 }
 
 /**
@@ -185,9 +190,71 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 // ---------------------------------------------------------- download takeover
 
-// URLs we handed back to Chrome because Fletch could not take them. Without
-// this, re-issuing the download would trip this same listener forever.
-const handingBack = new Set();
+// Chrome replays downloads.onCreated for everything already in its download
+// list when the browser starts. Arriving here is therefore no proof that a
+// file is being fetched right now: the record of a download finished last week
+// looks like a fresh one apart from its state and the time it began. Acting on
+// one cancels nothing and fetches the whole history over again.
+const FRESH_MS = 60 * 1000;
+
+function isLiveDownload(item) {
+  if (item.state !== 'in_progress') return false;
+  const started = Date.parse(item.startTime || '');
+  return !Number.isFinite(started) || Date.now() - started < FRESH_MS;
+}
+
+// URLs handed back to Chrome because Fletch could not take them. Kept in
+// session storage rather than a variable: the service worker is stopped
+// whenever it falls idle, and an entry forgotten that way means the hand-back
+// is caught as if it were new and handed back again, without end. Entries
+// expire instead of being removed on sight, so a redirect that changes the URL
+// cannot slip past on the second pass either.
+const HANDBACK_KEY = 'handedBack';
+const HANDBACK_MS = 5 * 60 * 1000;
+
+async function handedBackMap() {
+  const stored = await chrome.storage.session.get(HANDBACK_KEY);
+  const map = stored[HANDBACK_KEY] || {};
+  const now = Date.now();
+  for (const [url, at] of Object.entries(map)) {
+    if (now - at > HANDBACK_MS) delete map[url];
+  }
+  return map;
+}
+
+async function wasHandedBack(urls) {
+  const map = await handedBackMap();
+  return urls.some((url) => map[url]);
+}
+
+async function markHandedBack(urls, mark = true) {
+  const map = await handedBackMap();
+  for (const url of urls) {
+    if (mark) map[url] = Date.now();
+    else delete map[url];
+  }
+  await chrome.storage.session.set({ [HANDBACK_KEY]: map });
+}
+
+// Whether the app is up, asked before anything is cancelled so that a closed
+// Fletch leaves the browser's own downloads alone entirely, rather than
+// stopping each one and starting it again.
+let appSeenAt = 0;
+let appSeenOk = false;
+
+async function appIsRunning() {
+  if (Date.now() - appSeenAt < 5000) return appSeenOk;
+  const { port } = await config();
+  const signal = AbortSignal.timeout ? AbortSignal.timeout(1500) : undefined;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/ping`, { signal });
+    appSeenOk = res.ok;
+  } catch {
+    appSeenOk = false;
+  }
+  appSeenAt = Date.now();
+  return appSeenOk;
+}
 
 function extensionOf(url, filename) {
   const name = filename || (() => {
@@ -204,6 +271,8 @@ function extensionOf(url, filename) {
  * nothing is ever silently lost.
  */
 chrome.downloads.onCreated.addListener(async (item) => {
+  if (!isLiveDownload(item)) return;
+
   const { takeover, skipExt } = await config();
   if (!takeover) return;
 
@@ -211,12 +280,23 @@ chrome.downloads.onCreated.addListener(async (item) => {
   // blob:, data: and filesystem: URLs exist only inside the page; Fletch has
   // nothing it could re-request, so Chrome keeps those.
   if (!/^https?:\/\//i.test(url)) return;
-  if (handingBack.has(url)) { handingBack.delete(url); return; }
+
+  // Both spellings: a redirect leaves the hand-back with a finalUrl that is
+  // not the URL it was started with.
+  const urls = [item.url, item.finalUrl].filter(Boolean);
+  if (await wasHandedBack(urls)) return;
 
   const skips = String(skipExt || '').split(/[,\s]+/).map((s) => s.trim().replace(/^\./, '').toLowerCase()).filter(Boolean);
   if (skips.length && skips.includes(extensionOf(url, item.filename))) return;
 
-  try { await chrome.downloads.cancel(item.id); } catch { /* already finished */ }
+  // Nothing to take over with: let Chrome get on with it untouched.
+  if (!await appIsRunning()) return;
+
+  let cancelled = false;
+  try { await chrome.downloads.cancel(item.id); cancelled = true; } catch { /* finished first */ }
+  // It beat us to it and Chrome has the file. Taking it over now would only
+  // fetch a second copy of something already on disk.
+  if (!cancelled) return;
   try { await chrome.downloads.erase({ id: item.id }); } catch { /* already gone */ }
 
   const sent = await send({
@@ -231,13 +311,14 @@ chrome.downloads.onCreated.addListener(async (item) => {
     return;
   }
 
-  // Fletch is not running or not paired: put it back the way it was.
-  handingBack.add(url);
+  // Fletch answered the ping and then refused the download: put it back the
+  // way it was.
+  await markHandedBack(urls);
   try {
     await chrome.downloads.download({ url });
-    notify('Fletch is not running', 'Chrome is handling this download instead.');
+    notify('Fletch could not take that', 'Chrome is handling this download instead.');
   } catch {
-    handingBack.delete(url);
+    await markHandedBack(urls, false);
     notify('Download could not be started', url.slice(0, 120));
   }
 });
