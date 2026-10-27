@@ -385,6 +385,17 @@ function registerIpc() {
 
   ipcMain.handle('setup:magnet', () => ok(magnetState));
 
+  // Windows 11 keeps the real protocol choice behind a signed per-user key
+  // that no installer may write, so the most an app can do is take the user
+  // to the page where they can pick it.
+  ipcMain.handle('setup:openDefaultApps', () => {
+    if (process.platform === 'win32') {
+      shell.openExternal('ms-settings:defaultapps').catch(() => {});
+      return ok({ opened: 'settings' });
+    }
+    return bad(new Error('Default-app settings are only applicable on Windows.'));
+  });
+
   ipcMain.handle('update:status', () => ok(updater.status()));
   ipcMain.handle('update:check', async () => {
     await updater.check(false);

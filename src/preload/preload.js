@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('fletch', {
     openExtensionFolder: () => call('setup:openExtensionFolder'),
     copyToken: () => call('setup:copyToken'),
     markDone: () => call('setup:markDone'),
+    magnet: () => call('setup:magnet'),
+    openDefaultApps: () => call('setup:openDefaultApps'),
   },
   update: {
     status: () => call('update:status'),

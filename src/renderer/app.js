@@ -949,6 +949,17 @@ function settingsDialog() {
       + 'Close the browser first if it refuses to read them.'));
     box.appendChild(cf);
 
+    const mf = el('label', 'field');
+    mf.appendChild(el('span', 'lab', 'Magnet links'));
+    const mb = el('button', 'btn', 'Open Windows default apps…');
+    mb.onclick = () => fletch.setup.openDefaultApps();
+    mf.appendChild(mb);
+    mf.appendChild(el('span', 'hint',
+      'Windows will not let any program make itself the handler for magnet links on its own — '
+      + 'that choice is the user’s to make. Pick Fletch there to open magnets from anywhere. '
+      + 'With the extension installed, magnet links you click in the browser already come straight here.'));
+    box.appendChild(mf);
+
     const how = el('label', 'field');
     how.appendChild(el('span', 'lab', 'Installing the extension'));
     const walk = el('button', 'btn primary', 'Walk me through it');
