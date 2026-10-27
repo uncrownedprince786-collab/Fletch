@@ -169,6 +169,22 @@ jobs:
             -exec cp {} out/ \;
           ls -lh out
 
+      # Raw workflow logs need a token to fetch, which makes diagnosing a
+      # platform-specific failure from outside CI almost impossible. Release
+      # assets are public, so any build or test output that failed rides along
+      # with the release and can simply be read.
+      - name: Attach any failure logs
+        run: |
+          for dir in artifacts/build-log-* artifacts/test-output-*; do
+            [ -d "$dir" ] || continue
+            label=$(basename "$dir")
+            for f in "$dir"/*.txt; do
+              [ -f "$f" ] || continue
+              cp "$f" "out/${label}.txt"
+            done
+          done
+          ls -lh out
+
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*
