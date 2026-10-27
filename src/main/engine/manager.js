@@ -17,8 +17,20 @@ const {
 } = require('./util');
 const { filenameFromUrl } = require('./probe');
 const { scrapePage } = require('./scrape');
+const cookieJar = require('./cookies');
 
 const TERMINAL = new Set(['done', 'error', 'cancelled']);
+
+/** Headers minus anything that carries a live session. */
+function stripSession(headers) {
+  if (!headers) return headers;
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (/^(cookie|authorization|x-csrf-token)$/i.test(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 /**
  * The queue.
@@ -40,6 +52,10 @@ class DownloadManager extends EventEmitter {
 
     this.tasks = new Map();
     this._live = new Map();   // task id -> active downloader
+    // Live session cookies, kept in memory only. These are as sensitive as a
+    // password and have no business sitting in a plain JSON file, so they are
+    // never persisted; after a restart the browser supplies them again.
+    this._cookies = new Map();
     this._analysing = 0;
     this._dirty = false;
     this._flushTimer = null;
@@ -100,7 +116,16 @@ class DownloadManager extends EventEmitter {
   _persist() {
     const list = [...this.tasks.values()].map((t) => {
       const { segments, ...rest } = t;
-      return { ...rest, speed: 0, connections: 0 };
+      return {
+        ...rest,
+        speed: 0,
+        connections: 0,
+        // A Cookie header is a live session. It is wanted in memory for the
+        // duration of the download and has no business being written to a
+        // plain file that survives it.
+        headers: stripSession(rest.headers),
+        parts: (rest.parts || []).map((p) => ({ ...p, headers: stripSession(p.headers) })),
+      };
     });
     this.store.set('tasks', list);
   }
@@ -223,6 +248,11 @@ class DownloadManager extends EventEmitter {
       finishedAt: 0,
     };
 
+    if (Array.isArray(opts.cookies) && opts.cookies.length) {
+      this._cookies.set(task.id, opts.cookies);
+      task.hasCookies = true;
+    }
+
     this.tasks.set(task.id, task);
     this._touch(task);
     this._persist();
@@ -244,6 +274,14 @@ class DownloadManager extends EventEmitter {
         this._persist();
         this._drain();
         return;
+      }
+
+      // Present the browser's session from the first request onwards: some
+      // hosts answer a probe quite differently to a stranger.
+      const jar = this._cookies.get(task.id);
+      if (jar) {
+        const header = cookieJar.toHeader(cookieJar.forUrl(jar, task.url));
+        if (header) task.headers = { ...task.headers, Cookie: header };
       }
 
       let info = null;
@@ -415,13 +453,28 @@ class DownloadManager extends EventEmitter {
     if (bin) {
       task.stage = 'Reading the page…';
       this._touch(task);
+
+      // yt-dlp takes cookies as a file, not a header. The extension's are
+      // preferred over reading the browser's own store, which current Chrome
+      // encrypts specifically to stop other programs doing that.
+      const jar = this._cookies.get(task.id);
+      let cookieFile = null;
+      try {
+        cookieFile = await cookieJar.writeCookieFile(jar, path.join(this.tmpDir, task.id), 'session');
+      } catch { /* carry on without them */ }
+
       try {
         info = await ytdlp.extract(bin, task.url, {
-          cookiesFromBrowser: this.settings.get('cookiesFromBrowser', '') || undefined,
+          cookieFile: cookieFile || undefined,
+          cookiesFromBrowser: cookieFile
+            ? undefined
+            : (this.settings.get('cookiesFromBrowser', '') || undefined),
           proxy: this.settings.get('proxy', '') || undefined,
         });
       } catch (err) {
         extractError = err;
+      } finally {
+        if (cookieFile) await fsp.rm(cookieFile, { force: true }).catch(() => {});
       }
     }
 
@@ -698,8 +751,15 @@ class DownloadManager extends EventEmitter {
     const bin = await this.binaries.resolve('yt-dlp');
     if (!bin) throw new Error('yt-dlp is needed for this link. Install it from Settings.');
     const ffmpeg = await this.binaries.resolve('ffmpeg');
+    const jar = this._cookies.get(task.id);
+    let cookieFile = null;
+    try {
+      cookieFile = await cookieJar.writeCookieFile(jar, path.join(this.tmpDir, task.id), 'session');
+    } catch { /* carry on without them */ }
+
     const dl = new ytdlp.YtDlpDownload({
       ytdlpPath: bin,
+      cookieFile: cookieFile || undefined,
       ffmpegPath: ffmpeg ? path.dirname(ffmpeg) : undefined,
       url: task.pageUrl || task.sourceUrl,
       filePath: task.filePath,
@@ -709,7 +769,11 @@ class DownloadManager extends EventEmitter {
       proxy: this.settings.get('proxy', '') || undefined,
     });
     this._wire(task, dl);
-    return dl.start();
+    try {
+      return await dl.start();
+    } finally {
+      if (cookieFile) await fsp.rm(cookieFile, { force: true }).catch(() => {});
+    }
   }
 
   /** Separate video and audio streams, fetched in turn then stitched together. */
@@ -878,6 +942,7 @@ class DownloadManager extends EventEmitter {
     const live = this._live.get(id);
     if (live) live.cancel();
     this.tasks.delete(id);
+    this._cookies.delete(id);
 
     await fsp.rm(task.filePath + '.fletchpart', { force: true }).catch(() => {});
     await fsp.rm(task.filePath + '.fletchpart.meta', { force: true }).catch(() => {});

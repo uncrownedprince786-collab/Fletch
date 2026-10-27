@@ -34,6 +34,37 @@ function identityHeaders() {
   return { 'X-Fletch-Extension': chrome.runtime.id };
 }
 
+/**
+ * The cookies that would be sent to this exact URL, and nothing else.
+ *
+ * Fletch runs as its own program, so it arrives at every site as a stranger
+ * even while the browser is signed in. Reading the browser's cookie store from
+ * outside no longer works on current Chrome, which encrypts it on purpose, so
+ * the extension — which is already inside the signed-in browser — passes along
+ * the session for the one site being downloaded from.
+ *
+ * Deliberately narrow: chrome.cookies.getAll({ url }) returns only what that
+ * URL itself would receive. No other site's cookies are read, and this runs
+ * only when a download is started.
+ */
+async function collectCookies(url) {
+  if (!/^https?:\/\//i.test(url || '')) return [];
+  try {
+    const list = await chrome.cookies.getAll({ url });
+    return list.map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path || '/',
+      secure: Boolean(c.secure),
+      hostOnly: Boolean(c.hostOnly),
+      expires: c.expirationDate ? Math.floor(c.expirationDate) : 0,
+    }));
+  } catch {
+    return []; // permission withheld, or an internal URL
+  }
+}
+
 async function ensurePaired(force = false) {
   const { port, token } = await config();
   if (token && !force) return token;
@@ -56,6 +87,13 @@ async function send(payload, quiet = false) {
   const cfg = await config();
   const port = cfg.port;
   const token = cfg.token || await ensurePaired();
+
+  // Carry the signed-in session for the site being downloaded from, so Fletch
+  // is not turned away at the door while the browser is logged in.
+  if (cfg.shareCookies && payload && payload.url && !payload.cookies) {
+    const cookies = await collectCookies(payload.url);
+    if (cookies.length) payload = { ...payload, cookies };
+  }
   if (!token) {
     lastSendError = 'not paired with Fletch';
     if (!quiet) {

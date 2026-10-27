@@ -2,12 +2,13 @@
 
 const $ = (s) => document.querySelector(s);
 
-chrome.storage.local.get({ port: 47809, token: '', takeover: true, skipExt: '', showGrabber: true }, (cfg) => {
+chrome.storage.local.get({ port: 47809, token: '', takeover: true, skipExt: '', showGrabber: true, shareCookies: true }, (cfg) => {
   $('#port').value = cfg.port;
   $('#token').value = cfg.token;
   $('#takeover').checked = cfg.takeover;
   $('#skipExt').value = cfg.skipExt;
   $('#showGrabber').checked = cfg.showGrabber;
+  $('#shareCookies').checked = cfg.shareCookies;
 });
 
 function say(text, ok) {
@@ -22,7 +23,8 @@ $('#save').onclick = async () => {
   const takeover = $('#takeover').checked;
   const skipExt = $('#skipExt').value.trim();
   const showGrabber = $('#showGrabber').checked;
-  await chrome.storage.local.set({ port, token, takeover, skipExt, showGrabber });
+  const shareCookies = $('#shareCookies').checked;
+  await chrome.storage.local.set({ port, token, takeover, skipExt, showGrabber, shareCookies });
   say('Saved. Checking…');
 
   try {

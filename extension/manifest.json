@@ -5,6 +5,7 @@
   "description": "Catch downloads from your browser and send them to Fletch, with a one-click grabber on video pages.",
   "permissions": [
     "contextMenus",
+    "cookies",
     "storage",
     "webRequest",
     "downloads",

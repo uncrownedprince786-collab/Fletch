@@ -218,7 +218,8 @@ class YtDlpDownload extends EventEmitter {
       '--no-playlist', '-o', this.outPath];
     if (this.formatId) args.push('-f', this.formatId);
     if (this.opts.ffmpegPath) args.push('--ffmpeg-location', this.opts.ffmpegPath);
-    if (this.opts.cookiesFromBrowser) args.push('--cookies-from-browser', this.opts.cookiesFromBrowser);
+    if (this.opts.cookieFile) args.push('--cookies', this.opts.cookieFile);
+    else if (this.opts.cookiesFromBrowser) args.push('--cookies-from-browser', this.opts.cookiesFromBrowser);
     if (this.opts.proxy) args.push('--proxy', this.opts.proxy);
     if (this.opts.connections) args.push('--concurrent-fragments', String(this.opts.connections));
     args.push('--', this.url);

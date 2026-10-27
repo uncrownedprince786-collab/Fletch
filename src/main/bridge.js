@@ -153,6 +153,9 @@ class Bridge {
               headers: payload.headers || {},
               forceVideo: Boolean(payload.forceVideo),
               audioOnly: Boolean(payload.audioOnly),
+              // The browser's session for this one site, so Fletch is not
+              // turned away while the browser is signed in.
+              cookies: Array.isArray(payload.cookies) ? payload.cookies : null,
             });
             added.push({ id: task.id, title: task.title || link });
           }
