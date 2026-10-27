@@ -8,11 +8,30 @@ const crypto = require('crypto');
 
 const DEFAULT_PORT = 47809;
 
+// The extension's identity is fixed by the public key in its manifest, so the
+// browser always gives it this id. Pairing can therefore happen by itself:
+// the app hands the token to a caller the browser vouches for, and the user
+// never has to copy anything.
+//
+// A web page cannot forge an Origin header — the browser sets it — so this
+// does not open the endpoint up to the internet. A malicious program already
+// running on the machine could claim the origin, but it would not need Fletch
+// to do anything it could not already do itself.
+const TRUSTED_EXTENSIONS = new Set([
+  'lmaaeoobpbmcgnaelmpakgnhbhaoejim', // Fletch Capture
+]);
+
+function extensionIdFrom(origin) {
+  const m = /^chrome-extension:\/\/([a-p]{32})$/i.exec(String(origin || '').trim());
+  return m ? m[1].toLowerCase() : null;
+}
+
 class Bridge {
   constructor(opts) {
     this.manager = opts.manager;
     this.settings = opts.settings;
     this.onActivate = opts.onActivate || (() => {});
+    this.onPaired = opts.onPaired || (() => {});
     this.server = null;
     this.port = null;
     this.token = this.settings.get('bridgeToken', '');
@@ -22,19 +41,30 @@ class Bridge {
     }
   }
 
+  /** True when the caller is the paired extension, by token or by identity. */
   _authorised(req) {
     const header = req.headers.authorization || '';
     const supplied = header.replace(/^Bearer\s+/i, '').trim();
-    if (!supplied || supplied.length !== this.token.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(this.token));
+    if (supplied && supplied.length === this.token.length
+      && crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(this.token))) {
+      return true;
+    }
+    // A request the browser itself stamps as coming from our extension is as
+    // good as the token, and is what lets pairing happen without the user.
+    return this._trustedExtension(req);
   }
 
-  _send(res, code, payload) {
+  _trustedExtension(req) {
+    const id = extensionIdFrom(req.headers.origin);
+    return Boolean(id && TRUSTED_EXTENSIONS.has(id));
+  }
+
+  _send(res, code, payload, origin) {
     const body = JSON.stringify(payload);
     res.writeHead(code, {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(body),
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': origin || '*',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
       'Cache-Control': 'no-store',
@@ -54,16 +84,31 @@ class Bridge {
   }
 
   _handle(req, res) {
-    if (req.method === 'OPTIONS') return this._send(res, 204, {});
+    const origin = req.headers.origin;
+    const echo = this._trustedExtension(req) ? origin : undefined;
+
+    if (req.method === 'OPTIONS') return this._send(res, 204, {}, echo);
 
     const url = (req.url || '').split('?')[0];
 
     // Lets the extension confirm Fletch is running before it offers to capture.
     if (url === '/ping' && req.method === 'GET') {
-      return this._send(res, 200, { app: 'Fletch', version: 1, ready: true });
+      return this._send(res, 200, { app: 'Fletch', version: 1, ready: true }, echo);
     }
 
-    if (!this._authorised(req)) return this._send(res, 401, { error: 'bad token' });
+    // Automatic pairing. The extension asks once and gets the token, so the
+    // user never has to copy it across by hand.
+    if (url === '/pair' && req.method === 'GET') {
+      if (!this._trustedExtension(req)) {
+        return this._send(res, 403, {
+          error: 'Pairing is only offered to the Fletch browser extension.',
+        }, echo);
+      }
+      this.onPaired();
+      return this._send(res, 200, { token: this.token, port: this.port }, echo);
+    }
+
+    if (!this._authorised(req)) return this._send(res, 401, { error: 'bad token' }, echo);
 
     if (url === '/add' && req.method === 'POST') {
       let body = '';

@@ -48,8 +48,7 @@
       </div>
     </div>
     <p class="lede">
-      Pair this extension with the Fletch app running on your computer.
-      Open Fletch, go to Settings &rsaquo; Browser, and copy the two values below.
+      This extension pairs with Fletch by itself as soon as both are running &mdash; there is nothing to copy. The fields below are only a fallback, for a non-standard port or if pairing was refused.
     </p>
 
     <label>
@@ -59,7 +58,7 @@
     </label>
 
     <label>
-      <span class="t">Pairing token</span>
+      <span class="t">Pairing token (filled in automatically)</span>
       <input id="token" type="password" placeholder="paste the token from Fletch" autocomplete="off">
       <span class="h">Keeps other pages on your machine from queueing downloads. Treat it like a password.</span>
     </label>
@@ -72,6 +71,14 @@
         <span class="t2">Send browser downloads to Fletch</span>
         <span class="h">When you click a download link, Fletch takes it over instead of Chrome.
         If Fletch is not running, Chrome keeps it, so nothing is lost.</span>
+      </span>
+    </label>
+
+    <label class="check">
+      <input id="showGrabber" type="checkbox">
+      <span>
+        <span class="t2">Show a download button on videos</span>
+        <span class="h">A small button appears over a playing video so you can grab it in one click.</span>
       </span>
     </label>
 

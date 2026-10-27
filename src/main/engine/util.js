@@ -190,6 +190,34 @@ function looksLikeMediaUrl(url) {
   } catch { return false; }
 }
 
+const PAGE_EXT = new Set(['.html', '.htm', '.php', '.asp', '.aspx', '.jsp', '.cgi', '']);
+
+const DOWNLOADABLE_EXT = new Set([
+  ...VIDEO_EXT, ...AUDIO_EXT, ...DOC_EXT, ...ARCHIVE_EXT, ...PROGRAM_EXT, ...IMAGE_EXT,
+  '.torrent', '.srt', '.vtt', '.sub', '.json', '.xml', '.bin', '.img', '.dat',
+]);
+
+/**
+ * Does this URL name an actual file rather than a page?
+ *
+ * Used when the server will not answer a probe: a link ending in .mp4 is a
+ * file even if the host refuses to describe it, and handing it to the video
+ * extractor instead of simply downloading it is how a working link turns into
+ * "unsupported URL".
+ */
+function looksLikeFileUrl(url) {
+  try {
+    const u = new URL(String(url));
+    if (!/^https?:$/.test(u.protocol)) return false;
+    const ext = path.extname(u.pathname).toLowerCase();
+    if (!ext || PAGE_EXT.has(ext)) return false;
+    // Only extensions we actually recognise. Anything else is more likely a
+    // dot inside a slug than a file, and guessing wrong here sends a real
+    // page to the downloader instead of the extractor.
+    return DOWNLOADABLE_EXT.has(ext);
+  } catch { return false; }
+}
+
 function isHttpUrl(url) {
   try { return /^https?:$/.test(new URL(String(url)).protocol); } catch { return false; }
 }
@@ -201,5 +229,5 @@ function newId() {
 module.exports = {
   UA_DESKTOP, formatBytes, formatDuration, sanitizeFilename, uniquePath,
   SpeedMeter, RateLimiter, sleep, pool, extFromMime, categoryFor,
-  looksLikeMediaUrl, isHttpUrl, newId, VIDEO_EXT, AUDIO_EXT,
+  looksLikeMediaUrl, looksLikeFileUrl, isHttpUrl, newId, VIDEO_EXT, AUDIO_EXT,
 };

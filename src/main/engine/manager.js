@@ -12,8 +12,11 @@ const { probe } = require('./probe');
 const ytdlp = require('./ytdlp');
 const merge = require('./merge');
 const {
-  RateLimiter, sanitizeFilename, uniquePath, categoryFor, newId, isHttpUrl, UA_DESKTOP,
+  RateLimiter, sanitizeFilename, uniquePath, categoryFor, newId, isHttpUrl,
+  looksLikeFileUrl, UA_DESKTOP,
 } = require('./util');
+const { filenameFromUrl } = require('./probe');
+const { scrapePage } = require('./scrape');
 
 const TERMINAL = new Set(['done', 'error', 'cancelled']);
 
@@ -249,14 +252,24 @@ class DownloadManager extends EventEmitter {
         catch (err) { task.probeError = err.message; }
       }
 
-      const looksLikePage = !info || /text\/html|application\/xhtml/.test(info.mime || '');
+      // When the server answers, its content type decides. When it refuses to
+      // answer at all — which plenty of file hosts do for links tied to one
+      // IP and a short window — the shape of the URL decides instead. Sending
+      // a perfectly good .mp4 link to the video extractor because a probe was
+      // rejected is how a working download becomes "unsupported URL".
+      const fileish = looksLikeFileUrl(task.url);
+      const looksLikePage = info
+        ? /text\/html|application\/xhtml/.test(info.mime || '')
+        : !fileish;
 
       if (info && info.isPlaylist) {
         await this._setupHls(task, info);
-      } else if (looksLikePage || opts.forceVideo) {
+      } else if (opts.forceVideo || looksLikePage) {
         await this._setupVideo(task, opts);
-      } else {
+      } else if (info) {
         await this._setupFile(task, info);
+      } else {
+        this._setupUnprobedFile(task);
       }
 
       task.state = 'queued';
@@ -323,6 +336,60 @@ class DownloadManager extends EventEmitter {
     this._assignPath(task, `${base}.${plan.container === 'mp4' ? 'mp4' : 'ts'}`);
   }
 
+  /**
+   * A link that plainly names a file, from a server that would not describe
+   * it. The downloader finds out the size and whether ranges work when it
+   * actually connects, so nothing is lost by not knowing yet.
+   */
+  _setupUnprobedFile(task) {
+    task.kind = 'file';
+    task.engine = 'http';
+    task.size = null;
+    task.acceptRanges = undefined;
+    const name = sanitizeFilename(filenameFromUrl(task.url) || 'download');
+    task.title = task.title || name;
+    task.formatLabel = '';
+    this._assignPath(task, name);
+  }
+
+  /**
+   * Media found by reading the page rather than by an extractor. The page URL
+   * becomes the Referer, which many hosts insist on before serving the file.
+   */
+  async _setupFromScrape(task, found) {
+    task.kind = 'video';
+    task.pageUrl = found.pageUrl;
+    task.headers = { ...task.headers, Referer: found.pageUrl };
+    task.foundOnPage = found.alternatives;
+    const pageTitle = found.title ? sanitizeFilename(found.title) : '';
+
+    if (/\.m3u8(\?|#|$)/i.test(found.url) || /\.mpd(\?|#|$)/i.test(found.url)) {
+      task.title = pageTitle || task.title;
+      await this._setupHls(task, { url: found.url, filename: pageTitle || 'stream' });
+      task.formatLabel = `${task.formatLabel} · found on the page`;
+      return;
+    }
+
+    const info = await probe(found.url, { headers: task.headers }).catch(() => null);
+    if (info) {
+      await this._setupFile(task, info);
+      if (pageTitle) {
+        // The page's own title beats a CDN's filename, but keep the extension.
+        const ext = path.extname(task.filename) || path.extname(info.filename) || '.mp4';
+        task.title = pageTitle;
+        this._assignPath(task, `${pageTitle}${ext}`);
+      }
+    } else {
+      task.url = found.url;
+      this._setupUnprobedFile(task);
+      if (pageTitle) task.title = pageTitle;
+    }
+    // _setupFile and _setupUnprobedFile both call this a plain file. It came
+    // off a video page, and the UI should keep treating it as one.
+    task.kind = 'video';
+    task.formatLabel = 'Found on the page';
+  }
+
   _setupTorrent(task) {
     task.kind = 'torrent';
     task.engine = 'torrent';
@@ -342,17 +409,35 @@ class DownloadManager extends EventEmitter {
 
   async _setupVideo(task, opts) {
     const bin = await this.binaries.resolve('yt-dlp');
-    if (!bin) {
-      throw new Error('This link is a web page, so Fletch needs the yt-dlp helper to find the media on it. Install it from Settings (one click).');
+    let info = null;
+    let extractError = null;
+
+    if (bin) {
+      task.stage = 'Reading the page…';
+      this._touch(task);
+      try {
+        info = await ytdlp.extract(bin, task.url, {
+          cookiesFromBrowser: this.settings.get('cookiesFromBrowser', '') || undefined,
+          proxy: this.settings.get('proxy', '') || undefined,
+        });
+      } catch (err) {
+        extractError = err;
+      }
     }
 
-    task.stage = 'Reading the page…';
-    this._touch(task);
+    // yt-dlp covers the sites it knows. For the rest — embed pages, file
+    // lockers, one-off hosts — read the page and find the player's source.
+    if (!info || !(info.formats || []).length) {
+      task.stage = 'Looking for media on the page…';
+      this._touch(task);
+      const found = await scrapePage(task.url, { headers: task.headers }).catch(() => null);
+      if (found) return this._setupFromScrape(task, found);
 
-    const info = await ytdlp.extract(bin, task.url, {
-      cookiesFromBrowser: this.settings.get('cookiesFromBrowser', '') || undefined,
-      proxy: this.settings.get('proxy', '') || undefined,
-    });
+      if (!bin) {
+        throw new Error('This link is a web page. Fletch found no media on it, and the yt-dlp helper is not installed — add it from Settings to cover far more sites.');
+      }
+      throw extractError || new Error('No downloadable video was found on that page.');
+    }
 
     task.kind = 'video';
     task.title = info.title;
@@ -573,7 +658,9 @@ class DownloadManager extends EventEmitter {
       task.filePath = path.join(task.folder, meta.name || task.filename);
       task.size = meta.size;
       task.formatLabel = meta.files > 1 ? `Torrent · ${meta.files} files` : 'Torrent';
-      task.category = meta.files > 1 ? 'torrents' : categoryFor(meta.name);
+      // A torrent belongs under Torrents whatever it happens to contain.
+      // Filing a single-file torrent of a .mkv under Video just loses it.
+      task.category = 'torrents';
       this._touch(task);
       this._persist();
     });

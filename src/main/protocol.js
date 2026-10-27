@@ -1,5 +1,8 @@
 'use strict';
 const fs = require('fs');
+const fsp = require('fs/promises');
+const os = require('os');
+const path = require('path');
 const { execFile } = require('child_process');
 
 // Claiming magnet: links.
@@ -21,6 +24,50 @@ function reg(args) {
       resolve({ ok: !err, out: String(stdout || '') });
     });
   });
+}
+
+/** Escape a string for the right-hand side of a .reg file value. */
+function regEscape(value) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Write the association by importing a .reg file.
+ *
+ * `reg add /d "\"C:\path\app.exe\" \"%1\""` has to survive Node's argument
+ * quoting, Windows' command-line parsing and reg.exe's own, and the quotes do
+ * not come out the other side intact — which is why the repair silently did
+ * nothing. A .reg file has one well-defined escaping scheme and no shell in
+ * the middle of it.
+ */
+async function writeUserAssociation(exePath) {
+  const body = [
+    'Windows Registry Editor Version 5.00',
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Classes\\magnet]',
+    '@="URL:Magnet Protocol"',
+    '"URL Protocol"=""',
+    '"Content Type"="application/x-magnet"',
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Classes\\magnet\\DefaultIcon]',
+    `@="${regEscape(exePath)},0"`,
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Classes\\magnet\\shell\\open\\command]',
+    `@="${regEscape(`"${exePath}" "%1"`)}"`,
+    '',
+  ].join('\r\n');
+
+  const file = path.join(os.tmpdir(), `fletch-magnet-${Date.now()}.reg`);
+  try {
+    // reg.exe reads .reg files as UTF-16LE when they carry a BOM.
+    await fsp.writeFile(file, '\ufeff' + body, 'ucs2');
+    const res = await reg(['import', file]);
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    await fsp.rm(file, { force: true }).catch(() => {});
+  }
 }
 
 /** The command string the current user's magnet association points at. */
@@ -79,12 +126,15 @@ async function ensureMagnetHandler({ app, enabled = true }) {
   const stale = !fs.existsSync(target);
   if (!app.isPackaged && !stale) return { state: 'skipped-dev' };
 
-  const write = await reg(['add', KEY, '/ve', '/t', 'REG_SZ', '/d', `"${self}" "%1"`, '/f']);
-  if (!write.ok) return { state: 'failed', error: 'could not write the association' };
+  if (!await writeUserAssociation(self)) {
+    return { state: 'failed', error: 'could not write the association' };
+  }
 
-  // The parent keys matter too: without URL Protocol the shell ignores it.
-  await reg(['add', 'HKCU\\Software\\Classes\\magnet', '/ve', '/t', 'REG_SZ', '/d', 'URL:Magnet Protocol', '/f']);
-  await reg(['add', 'HKCU\\Software\\Classes\\magnet', '/v', 'URL Protocol', '/t', 'REG_SZ', '/d', '', '/f']);
+  // Confirm it actually landed, rather than trusting the exit code.
+  const after = exePathFrom(await readUserAssociation());
+  if (after.toLowerCase() !== self.toLowerCase()) {
+    return { state: 'failed', error: `association still points at ${after || 'nothing'}` };
+  }
 
   return { state: stale ? 'repaired-stale' : 'taken-over', from: target };
 }

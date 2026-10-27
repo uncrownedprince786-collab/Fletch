@@ -32,7 +32,8 @@ function duration(sec) {
 
 const CATEGORY_ICON = {
   video: '▶', audio: '♪', documents: '▤', archives: '▦',
-  programs: '⚙', images: '▣', torrents: '☵', other: '●',
+  // Up and down together: a torrent both takes and gives.
+  programs: '⚙', images: '▣', torrents: '⇅', other: '●',
 };
 
 const STATE_LABEL = {
@@ -546,7 +547,8 @@ function handleUpdateStatus(s) {
 function setupDialog(info) {
   modal('Set up the browser extension', (c, close) => {
     c.appendChild(el('p', null,
-      'Two short steps and every download you click in your browser comes here instead.'));
+      'One step, and every download you click in your browser comes here instead. '
+      + 'Fletch and the extension introduce themselves to each other — there is nothing to copy.'));
 
     const step = (n, title) => {
       const h = el('div');
@@ -591,10 +593,11 @@ function setupDialog(info) {
     pathBox.style.marginTop = '10px';
     c.appendChild(pathBox);
 
-    // --- step 2: pair it
-    step(2, 'Paste the pairing token');
+    // --- step 2: nothing, usually
+    step(2, 'There is no step two');
     c.appendChild(el('p', null,
-      'On the Fletch Capture card choose Details → Extension options, then paste this in and press Save and test.'));
+      'The extension pairs itself the moment it loads, as long as Fletch is running. '
+      + 'The details below are only needed if that is refused — Details → Extension options.'));
 
     const grid = el('div', 'row2');
     grid.style.marginTop = '10px';

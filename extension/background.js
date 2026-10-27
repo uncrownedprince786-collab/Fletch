@@ -16,12 +16,39 @@ function config() {
   return new Promise((resolve) => chrome.storage.local.get(DEFAULTS, resolve));
 }
 
-async function send(payload, quiet = false) {
+/**
+ * Pair with the Fletch app without troubling the user.
+ *
+ * The app recognises this extension by the id the browser gives it, which is
+ * fixed by the public key in the manifest, and hands over the token on
+ * request. Copying it across by hand is only a fallback now.
+ */
+async function ensurePaired(force = false) {
   const { port, token } = await config();
+  if (token && !force) return token;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/pair`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.token) return null;
+    await chrome.storage.local.set({ token: data.token, port: data.port || port });
+    return data.token;
+  } catch {
+    return null; // app not running yet; we will try again on the next action
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => { ensurePaired(); });
+chrome.runtime.onStartup.addListener(() => { ensurePaired(); });
+
+async function send(payload, quiet = false) {
+  const cfg = await config();
+  const port = cfg.port;
+  const token = cfg.token || await ensurePaired();
   if (!token) {
     if (!quiet) {
-      notify('Fletch is not paired yet', 'Open the extension options and paste the pairing token from Fletch > Settings > Browser.');
-      chrome.runtime.openOptionsPage();
+      notify('Fletch is not running',
+        'Start Fletch and try again. It pairs with this extension by itself.');
     }
     return null;
   }
@@ -32,7 +59,11 @@ async function send(payload, quiet = false) {
       body: JSON.stringify(payload),
     });
     if (res.status === 401) {
-      if (!quiet) notify('Fletch rejected the token', 'The pairing token has changed. Copy it again from Fletch > Settings > Browser.');
+      // The app regenerated its token. Pair again and retry once, rather than
+      // sending the user off to copy a new one.
+      const fresh = await ensurePaired(true);
+      if (fresh) return send(payload, quiet);
+      if (!quiet) notify('Fletch would not accept this', 'Try restarting Fletch.');
       return null;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -196,6 +227,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
   if (msg.type === 'send') {
     send(msg.payload).then((r) => reply({ ok: Boolean(r) }));
+    return true;
+  }
+  // From the in-page grabber button and the magnet-link handler. Quiet: the
+  // content script shows its own feedback in the corner of the page.
+  if (msg.type === 'grab-video' || msg.type === 'grab-magnet') {
+    send({ ...msg.payload, show: false }, true).then((r) => reply({ ok: Boolean(r) }));
     return true;
   }
   if (msg.type === 'ping') {

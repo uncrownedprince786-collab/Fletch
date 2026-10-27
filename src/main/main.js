@@ -473,7 +473,17 @@ if (!gotLock) {
     buildTray();
     startClipboardWatch();
 
-    bridge = new Bridge({ manager, settings, onActivate: showWindow });
+    bridge = new Bridge({
+      manager,
+      settings,
+      onActivate: showWindow,
+      onPaired: () => {
+        // The extension has introduced itself, so the setup panel has served
+        // its purpose and should stop appearing.
+        settings.set('extensionSetUp', true);
+        if (win && !win.isDestroyed()) win.webContents.send('setup:paired', {});
+      },
+    });
     await bridge.start();
 
     // First run: walk the user straight into pairing the browser extension,

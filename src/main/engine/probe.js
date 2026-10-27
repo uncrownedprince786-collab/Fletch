@@ -36,9 +36,28 @@ function filenameFromUrl(url) {
  * plenty of CDNs answer HEAD with lies, or with 405.
  */
 async function probe(url, opts = {}) {
-  const headers = { ...(opts.headers || {}), Range: 'bytes=0-0' };
-  const res = await request(url, { method: 'GET', headers, timeout: opts.timeout || 20000, insecure: opts.insecure });
-  const code = res.statusCode || 0;
+  const base = { ...(opts.headers || {}) };
+  const timeout = opts.timeout || 20000;
+
+  let res = await request(url, {
+    method: 'GET',
+    headers: { ...base, Range: 'bytes=0-0' },
+    timeout,
+    insecure: opts.insecure,
+  });
+  let code = res.statusCode || 0;
+
+  // Plenty of file hosts reject a ranged request outright — 403, 400 or 416 —
+  // while happily serving the same URL as an ordinary GET. Asking again
+  // without the Range header is the difference between "this link is broken"
+  // and a download that just works.
+  if (code >= 400) {
+    res.resume();
+    res.destroy();
+    res = await request(url, { method: 'GET', headers: base, timeout, insecure: opts.insecure });
+    code = res.statusCode || 0;
+  }
+
   const h = res.headers || {};
   res.resume();
   res.destroy();
