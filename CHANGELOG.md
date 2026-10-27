@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.3
+
+- The extension will not take over more than a dozen downloads in ten seconds.
+  Nobody clicks that fast, so a burst on that scale means something upstream
+  is wrong, and the right answer to not understanding what is happening is to
+  stop touching it: the browser keeps the rest, and Fletch stands back for a
+  minute. This is not another fix for 1.2.2's history replay, which is dealt
+  with and tested. It is the ceiling that was missing when that went wrong —
+  the one that would have turned 727 duplicated files into twelve.
+
 ## 1.2.2
 
 - A withdrawn version can now be stopped. Fletch reads a small policy file

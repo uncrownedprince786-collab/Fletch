@@ -236,6 +236,54 @@ async function markHandedBack(urls, mark = true) {
   await chrome.storage.session.set({ [HANDBACK_KEY]: map });
 }
 
+// Nobody clicks ten downloads in a second. A burst on this scale means
+// something upstream is wrong — a page script gone mad, a browser behaviour
+// nobody has met yet — and the honest answer to not understanding what is
+// happening is to stop touching it, not to act on all of it.
+//
+// This is deliberately not a fix for the history replay, which is handled
+// above and tested. It is the ceiling that was missing when that went wrong:
+// the net for the next fault, whatever it turns out to be. The cost of being
+// wrong here is a handful of downloads that Chrome keeps for itself, which is
+// the harmless direction.
+const BURST_KEY = 'takeoverBurst';
+const BURST_WINDOW_MS = 10 * 1000;
+// Twelve in ten seconds. Set so that clicking a batch of links by hand is
+// never caught, while the runaway that prompted this — which managed about
+// two and a half files a second, for minutes — trips it within about five
+// seconds of starting.
+const BURST_LIMIT = 12;
+const BURST_COOLDOWN_MS = 60 * 1000;
+
+/**
+ * Record this takeover and say whether the extension should stand down.
+ *
+ * Kept in session storage for the same reason as the hand-back record: a
+ * counter in a variable is reset every time Chrome stops the idle service
+ * worker, which is precisely when a runaway would be at its worst.
+ */
+async function burstTripped() {
+  const now = Date.now();
+  const stored = await chrome.storage.session.get(BURST_KEY);
+  const state = stored[BURST_KEY] || { times: [], until: 0 };
+
+  if (state.until > now) return true; // still standing down
+
+  const times = (state.times || []).filter((t) => now - t < BURST_WINDOW_MS);
+  times.push(now);
+
+  const tripped = times.length > BURST_LIMIT;
+  if (tripped) state.until = now + BURST_COOLDOWN_MS;
+  state.times = times;
+  await chrome.storage.session.set({ [BURST_KEY]: state });
+
+  if (tripped) {
+    notify('Fletch has stepped back',
+      'Downloads were arriving faster than anyone could click. Your browser is handling them for the next minute.');
+  }
+  return tripped;
+}
+
 // Whether the app is up, asked before anything is cancelled so that a closed
 // Fletch leaves the browser's own downloads alone entirely, rather than
 // stopping each one and starting it again.
@@ -291,6 +339,9 @@ chrome.downloads.onCreated.addListener(async (item) => {
 
   // Nothing to take over with: let Chrome get on with it untouched.
   if (!await appIsRunning()) return;
+
+  // Too many, too fast to be a person: leave the rest to the browser.
+  if (await burstTripped()) return;
 
   let cancelled = false;
   try { await chrome.downloads.cancel(item.id); cancelled = true; } catch { /* finished first */ }

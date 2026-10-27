@@ -160,6 +160,37 @@ function ok(name) { pass++; process.stdout.write(`   ✓ ${name}\n`); }
     addFails = false;
   }
 
+  {
+    // The ceiling that was missing the first time. Whatever produces a burst
+    // next, the extension stops acting on it rather than riding it down.
+    const { calls, fire } = load({ port });
+    for (let i = 1; i <= 20; i += 1) {
+      await fire(item({ id: i, url: `https://example.test/file-${i}.zip`, finalUrl: `https://example.test/file-${i}.zip` }));
+    }
+    assert.strictEqual(calls.cancelled.length, 12, 'it takes over a plausible number, then stands down');
+    assert.deepStrictEqual(calls.downloaded, [], 'and the rest are simply left to Chrome');
+    assert.ok(calls.notified.includes('Fletch has stepped back'), 'the user is told once, not twenty times');
+    assert.strictEqual(calls.notified.filter((t) => t === 'Fletch has stepped back').length, 1,
+      'and only once');
+    ok('a flood is left to the browser instead of being taken over');
+  }
+
+  {
+    // A cooling-off that a restarted service worker cannot forget, for the
+    // same reason the hand-back record lives there.
+    const session = {};
+    const first = load({ port, session });
+    for (let i = 1; i <= 14; i += 1) {
+      await first.fire(item({ id: i, url: `https://example.test/a-${i}.zip`, finalUrl: `https://example.test/a-${i}.zip` }));
+    }
+    assert.strictEqual(first.calls.cancelled.length, 12, 'the ceiling held');
+
+    const second = load({ port, session });
+    await second.fire(item({ id: 99, url: 'https://example.test/after.zip', finalUrl: 'https://example.test/after.zip' }));
+    assert.deepStrictEqual(second.calls.cancelled, [], 'a restarted worker is still standing down');
+    ok('the cooling-off survives the service worker being stopped');
+  }
+
   app.close();
   process.stdout.write(`\n   ${pass} checks passed\n`);
 })().catch((err) => { console.error(err); process.exitCode = 1; });
