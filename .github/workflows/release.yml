@@ -32,6 +32,11 @@ jobs:
               release/latest.yml
           - os: macos-latest
             label: macOS
+            # zip only in the main step. A .app in a zip always packages
+            # cleanly; building a .dmg needs hdiutil and is the part that has
+            # been failing, so it is attempted separately and allowed to fail
+            # rather than taking the whole macOS build down with it.
+            buildArgs: --mac zip
             artifacts: |
               release/*.dmg
               release/*.zip
@@ -91,9 +96,18 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          npx electron-builder --publish never 2>&1 | tee build-output.txt
+          npx electron-builder ${{ matrix.buildArgs }} --publish never 2>&1 | tee build-output.txt
         env:
           # No Apple certificate, so skip notarisation rather than fail on it.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # Nice to have, not worth losing the release over.
+      - name: Also try a macOS .dmg
+        if: matrix.os == 'macos-latest'
+        continue-on-error: true
+        shell: bash
+        run: npx electron-builder --mac dmg --publish never 2>&1 | tee -a build-output.txt
+        env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Show why the build failed
@@ -106,6 +120,15 @@ jobs:
             tail -60 build-output.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.label }}
+          path: build-output.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Package the browser extension
         if: matrix.os == 'windows-latest'
