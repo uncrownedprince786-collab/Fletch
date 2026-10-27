@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fletch Capture</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      width: 340px; background: #0E1116; color: #E8ECF3; padding: 12px;
+      font: 13px/1.45 'Segoe UI', system-ui, sans-serif;
+    }
+    .head { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+    .head img { width: 24px; height: 24px; border-radius: 6px; }
+    .head b { font-size: 14px; }
+    .status { margin-left: auto; font-size: 11px; color: #9AA6B8; }
+    .status.ok { color: #3DD68C; }
+    .status.no { color: #FF6B6B; }
+    button {
+      font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid #242C38;
+      background: #151A22; color: #E8ECF3; padding: 8px 11px; width: 100%;
+      text-align: left; transition: background .12s;
+    }
+    button:hover { background: #1C222C; }
+    button.primary {
+      background: linear-gradient(135deg, #FFC24B, #FF5F3D); color: #1A1005;
+      border-color: transparent; font-weight: 600; text-align: center;
+    }
+    .stack { display: flex; flex-direction: column; gap: 6px; }
+    h4 {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+      color: #9AA6B8; margin: 14px 0 6px; font-weight: 600;
+    }
+    .item .u {
+      font-size: 11px; color: #9AA6B8; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
+    }
+    .item .k { font-weight: 600; font-size: 12px; }
+    .none { color: #9AA6B8; font-size: 12px; padding: 6px 2px; }
+    a { color: #FFB020; font-size: 11.5px; }
+    .toggle {
+      display: flex; align-items: center; gap: 8px; cursor: pointer;
+      font-size: 12px; margin-bottom: 8px;
+    }
+    .toggle input { width: 15px; height: 15px; accent-color: #FF9A2E; flex: none; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <img src="icon128.png" alt="">
+    <b>Fletch Capture</b>
+    <span class="status" id="status">checking…</span>
+  </div>
+
+  <div class="stack">
+    <button class="primary" id="grab">Grab video from this page</button>
+    <button id="grabAudio">Audio only</button>
+  </div>
+
+  <h4>Media seen on this tab</h4>
+  <div class="stack" id="list"><div class="none">Nothing detected yet.</div></div>
+
+  <h4>Settings</h4>
+  <label class="toggle">
+    <input type="checkbox" id="takeover">
+    <span>Catch downloads from this browser</span>
+  </label>
+  <a href="#" id="opts">Pairing and port…</a>
+
+  <script src="popup.js"></script>
+</body>
+</html>

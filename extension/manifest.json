@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Fletch Capture",
+  "version": "1.0.0",
+  "description": "Send links and videos from your browser to the Fletch download manager.",
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "webRequest",
+    "downloads",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Fletch Capture",
+    "default_icon": {
+      "32": "icon32.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "32": "icon32.png",
+    "128": "icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAylKb24kopGHR758jMoQueW0TMATEYOGiaanWy5Oz9Rfv0Guymrbk9e7cPJO9Fb0XUfa/MqjNDVY4WhmFxgk43rv0uz7KiC+CaBYme/vCi0MaiM99lGqBz+w+UWJ6E/V6UkSErcRq+e2QB6Wjd8mNQHQ4f8XHBOCN6sdr/076E0MtFjR6h0NI4uNH9gTbe7pCQjaay5hXiTPgkX0kifX3cnrN+T84ck4iT9s4uqfoIkSSivB03Cs1s0v7BevxBW7iwIzCW4knZ7T0vTiSMbTa1tu9FLccCDfDz5zNw3REan8IA5Ci8tvM3WnpgA4SEQkEI6NfqVK94VhuJWM+yE42ywIDAQAB",
+  "homepage_url": "https://github.com/uncrownedprince786-collab/Fletch"
+}

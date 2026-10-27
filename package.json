@@ -1,0 +1,165 @@
+{
+  "name": "fletch",
+  "productName": "Fletch",
+  "version": "1.0.0",
+  "description": "A fast, free download manager: multi-connection acceleration, video extraction from 1800+ sites, and torrents. No licence key, no subscription.",
+  "main": "src/main/main.js",
+  "license": "MIT",
+  "author": "Fletch",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis portable",
+    "icons": "node scripts/make-icons.js",
+    "test": "node test/run.js",
+    "test:live": "node test/live.js",
+    "release": "electron-builder --win nsis portable --publish always",
+    "pack:extension": "node scripts/pack-extension.js",
+    "dist:all": "electron-builder -mwl --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.fletch.app",
+    "productName": "Fletch",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "Fletch-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Fletch",
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "artifactName": "Fletch-Setup-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Network",
+      "maintainer": "Fletch",
+      "artifactName": "Fletch-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.utilities",
+      "artifactName": "Fletch-${version}-${arch}.${ext}",
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "identity": null
+    },
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "uncrownedprince786-collab",
+        "repo": "Fletch",
+        "releaseType": "release"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Magnet URI",
+        "schemes": [
+          "magnet"
+        ]
+      }
+    ],
+    "portable": {
+      "artifactName": "Fletch-Portable-${version}-${arch}.${ext}"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "webtorrent": "^3.0.21"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uncrownedprince786-collab/Fletch.git"
+  },
+  "keywords": [
+    "download-manager",
+    "downloader",
+    "idm-alternative",
+    "video-downloader",
+    "youtube-dl",
+    "yt-dlp",
+    "hls",
+    "torrent",
+    "magnet",
+    "electron"
+  ],
+  "homepage": "https://github.com/uncrownedprince786-collab/Fletch",
+  "bugs": {
+    "url": "https://github.com/uncrownedprince786-collab/Fletch/issues"
+  }
+}

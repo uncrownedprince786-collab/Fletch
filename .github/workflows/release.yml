@@ -1,0 +1,124 @@
+name: Build and release
+
+# Push a tag like v1.0.1 and this builds Fletch on all three platforms and
+# attaches the installers to a GitHub Release. The macOS build has to happen on
+# a macOS runner — Apple's packaging tools do not run anywhere else — which is
+# why this exists rather than building everything on one machine.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:          # or run it by hand from the Actions tab
+
+permissions:
+  contents: write             # needed to create the release and upload to it
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Run the offline suites
+        run: npm test
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            artifacts: |
+              release/*.exe
+              release/*.blockmap
+              release/latest.yml
+          - os: macos-latest
+            label: macOS
+            artifacts: |
+              release/*.dmg
+              release/*.zip
+              release/latest-mac.yml
+          - os: ubuntu-latest
+            label: Linux
+            artifacts: |
+              release/*.AppImage
+              release/*.deb
+              release/latest-linux.yml
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Draw the icon set
+        run: npm run icons
+
+      - name: Build
+        run: npx electron-builder --publish never
+        env:
+          # No Apple certificate, so skip notarisation rather than fail on it.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Package the browser extension
+        if: matrix.os == 'windows-latest'
+        run: npm run pack:extension
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fletch-${{ matrix.label }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect the installers
+        run: |
+          mkdir -p out
+          find artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \
+            -o -name '*.AppImage' -o -name '*.deb' -o -name '*.yml' -o -name '*.blockmap' \) \
+            -exec cp {} out/ \;
+          ls -lh out
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          draft: false
+          generate_release_notes: true
+          body: |
+            ## Installing
+
+            | Platform | File |
+            |---|---|
+            | **Windows** | `Fletch-Setup-*.exe` — installs to Program Files. SmartScreen will warn, because the build is unsigned: **More info → Run anyway**. |
+            | **Windows, no install** | `Fletch-Portable-*.exe` — runs as-is. |
+            | **macOS (Apple silicon)** | `Fletch-*-arm64.dmg` |
+            | **macOS (Intel)** | `Fletch-*-x64.dmg` |
+            | **Linux** | `Fletch-*.AppImage` or `Fletch-*.deb` |
+
+            macOS builds are unsigned, so the first launch needs
+            **right-click → Open**, or *System Settings → Privacy & Security → Open Anyway*.
+
+            After installing, open Fletch and follow the on-screen panel to add
+            the browser extension.

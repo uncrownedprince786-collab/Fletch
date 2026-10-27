@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; font-src 'self';">
+  <title>Fletch</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="ember" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#FFC24B"/>
+              <stop offset="0.55" stop-color="#FF9A2E"/>
+              <stop offset="1" stop-color="#FF5F3D"/>
+            </linearGradient>
+          </defs>
+          <rect width="64" height="64" rx="16" fill="url(#ember)"/>
+          <g fill="none" stroke="#1A1005" stroke-width="6.5" stroke-linecap="round"
+             stroke-linejoin="round" opacity="0.92">
+            <path d="M15 17 L32 34 L49 17"/>
+            <path d="M20.5 29 L32 40.5 L43.5 29"/>
+            <path d="M26 41 L32 47 L38 41"/>
+          </g>
+        </svg>
+        <div>
+          <div class="name">Fletch</div>
+          <div class="tag">Download manager</div>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav"></nav>
+
+      <div class="sidebar-foot">
+        <div class="gauge">
+          <div class="row">
+            <span class="val" id="gaugeSpeed">0 B/s</span>
+          </div>
+          <div class="row">
+            <span class="lab" id="gaugeLabel">idle</span>
+          </div>
+          <canvas class="spark" id="spark" width="380" height="52"></canvas>
+        </div>
+        <button class="btn ghost wide" id="btnSettings">
+          <span>&#9881;</span> Settings
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <button class="btn primary" id="btnAdd">&#43;&nbsp; Add link</button>
+        <button class="btn" id="btnPauseAll">Pause all</button>
+        <button class="btn ghost" id="btnClear">Clear finished</button>
+        <div class="search">
+          <span class="search-ico">&#9906;</span>
+          <input id="search" type="search" placeholder="Filter downloads" spellcheck="false">
+        </div>
+      </div>
+      <div class="list" id="list"></div>
+    </main>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <div id="modalHost"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

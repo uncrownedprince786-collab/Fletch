@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fletch Capture — settings</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      background: #0E1116; color: #E8ECF3; padding: 32px;
+      font: 14px/1.55 'Segoe UI', system-ui, sans-serif;
+      display: flex; justify-content: center;
+    }
+    .wrap { width: 100%; max-width: 480px; }
+    .head { display: flex; align-items: center; gap: 11px; margin-bottom: 22px; }
+    .head img { width: 34px; height: 34px; border-radius: 9px; }
+    h1 { font-size: 17px; font-weight: 650; }
+    p.lede { color: #9AA6B8; font-size: 13px; margin-bottom: 22px; }
+    label { display: block; margin-bottom: 18px; }
+    label .t { font-size: 12.5px; font-weight: 600; margin-bottom: 6px; display: block; }
+    label .h { font-size: 11.5px; color: #9AA6B8; margin-top: 6px; display: block; }
+    input {
+      width: 100%; background: #0A0D12; border: 1px solid #242C38; color: #E8ECF3;
+      border-radius: 9px; padding: 10px 12px; font: inherit; outline: none;
+    }
+    input:focus { border-color: #FF9A2E; }
+    button {
+      background: linear-gradient(135deg, #FFC24B, #FF5F3D); color: #1A1005;
+      border: none; border-radius: 9px; padding: 10px 18px; font: inherit;
+      font-weight: 650; cursor: pointer;
+    }
+    .row { display: flex; align-items: center; gap: 12px; }
+    hr { border: none; border-top: 1px solid #242C38; margin: 4px 0 20px; }
+    .check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+    .check input { width: 16px; height: 16px; margin-top: 2px; accent-color: #FF9A2E; flex: none; }
+    .t2 { font-size: 13px; font-weight: 600; display: block; }
+    .msg { font-size: 12.5px; }
+    .msg.ok { color: #3DD68C; }
+    .msg.no { color: #FF6B6B; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <img src="icon128.png" alt="">
+      <div>
+        <h1>Fletch Capture</h1>
+      </div>
+    </div>
+    <p class="lede">
+      Pair this extension with the Fletch app running on your computer.
+      Open Fletch, go to Settings &rsaquo; Browser, and copy the two values below.
+    </p>
+
+    <label>
+      <span class="t">Port</span>
+      <input id="port" type="number" min="1" max="65535" value="47809">
+      <span class="h">The loopback port Fletch is listening on. 47809 unless it was taken.</span>
+    </label>
+
+    <label>
+      <span class="t">Pairing token</span>
+      <input id="token" type="password" placeholder="paste the token from Fletch" autocomplete="off">
+      <span class="h">Keeps other pages on your machine from queueing downloads. Treat it like a password.</span>
+    </label>
+
+    <hr>
+
+    <label class="check">
+      <input id="takeover" type="checkbox">
+      <span>
+        <span class="t2">Send browser downloads to Fletch</span>
+        <span class="h">When you click a download link, Fletch takes it over instead of Chrome.
+        If Fletch is not running, Chrome keeps it, so nothing is lost.</span>
+      </span>
+    </label>
+
+    <label>
+      <span class="t">Except these file types</span>
+      <input id="skipExt" type="text" placeholder="pdf, csv, txt" autocomplete="off">
+      <span class="h">Comma separated. Leave empty to let Fletch take everything.</span>
+    </label>
+
+    <div class="row">
+      <button id="save">Save and test</button>
+      <span class="msg" id="msg"></span>
+    </div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

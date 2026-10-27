@@ -1,0 +1,9 @@
+node_modules/
+release/
+dist/
+*.log
+
+# Signing material — never commit these.
+build/keys/
+*.pem
+*.p12
