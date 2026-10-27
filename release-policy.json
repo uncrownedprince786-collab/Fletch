@@ -3,5 +3,5 @@
   "minimumExtensionVersion": "1.0.1",
   "reason": "Fletch before 1.2.2 could re-download everything in your browser's download history whenever Chrome started, filling the Downloads folder with copies. This version stops that.",
   "downloadUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/latest",
-  "installerUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/download/v1.2.2/Fletch-Setup-1.2.2-x64.exe"
+  "installerUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/download/v1.2.3/Fletch-Setup-1.2.3-x64.exe"
 }
