@@ -1,7 +1,7 @@
 {
-  "minimumVersion": "1.2.4",
+  "minimumVersion": "1.2.5",
   "minimumExtensionVersion": "1.0.1",
-  "reason": "Fletch before 1.2.4 did not keep telling you to reload the browser add-on after an update, and versions before 1.2.2 could re-download everything in your browser's download history whenever Chrome started. Install this one, then restart your browser.",
+  "reason": "Fletch before 1.2.5 never offered to install yt-dlp, the helper that links to web pages need, so page downloads failed with an error that explained nothing. Earlier versions also had a browser add-on that could re-download your whole download history. Install this one, then restart your browser.",
   "downloadUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/latest",
-  "installerUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/download/v1.2.4/Fletch-Setup-1.2.4-x64.exe"
+  "installerUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/download/v1.2.5/Fletch-Setup-1.2.5-x64.exe"
 }
