@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.4
+
+- Installing an update always leaves the browser holding the add-on from the
+  version before it, so the update screen now says to reload it every time,
+  rather than only when a published floor said the add-on was too old.
+- An out-of-date add-on on its own no longer blocks the window. It shows a bar
+  along the bottom instead, which stays until the add-on reports a current
+  version. Fletch can replace itself, so locking the window over an app update
+  is always escapable; it cannot reach into the browser, and anyone who loaded
+  the add-on from a folder of their own could have pressed Reload all day
+  without the version ever changing. Locking them out of the app over that
+  would have been a trap. The bar offers the extensions page and the folder
+  holding the current files, which is what actually fixes that case.
+- Whether the browser's add-on is behind is now judged against the copy this
+  build carries, not a line in the policy file. It is true by itself after
+  every release, and needs nobody to remember to publish a floor.
+
 ## 1.2.3
 
 - The extension will not take over more than a dozen downloads in ten seconds.

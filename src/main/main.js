@@ -163,6 +163,16 @@ function extensionDir() {
     : path.join(__dirname, '..', '..', 'extension');
 }
 
+/** The version of the extension sitting in this build's resources. */
+function bundledExtensionVersion() {
+  try {
+    const manifest = path.join(extensionDir(), 'manifest.json');
+    return String(JSON.parse(fs.readFileSync(manifest, 'utf8')).version || '');
+  } catch {
+    return ''; // no bundled copy to compare against; say nothing rather than guess
+  }
+}
+
 const BROWSERS = [
   { name: 'Chrome', page: 'chrome://extensions', paths: [
     'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -505,7 +515,12 @@ if (!gotLock) {
       new Notification({ title: 'Download failed', body: `${task.title}\n${task.error}` }).show();
     });
 
-    updater = new Updater({ app, settings, policyUrl: process.env.FLETCH_POLICY_URL || '' });
+    updater = new Updater({
+      app,
+      settings,
+      policyUrl: process.env.FLETCH_POLICY_URL || '',
+      bundledExtension: bundledExtensionVersion(),
+    });
     updater.on('status', (s) => {
       if (win && !win.isDestroyed()) win.webContents.send('update:status', s);
       // Only interrupt for something the user can act on.

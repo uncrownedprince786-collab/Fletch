@@ -77,6 +77,24 @@ function ok(name) { pass++; process.stdout.write(`   ✓ ${name}\n`); }
   }
 
   {
+    // Judged against the add-on this build carries, so no policy edit is
+    // needed for the ordinary case: a new app always ships a browser copy the
+    // browser has not picked up yet.
+    const u = new Updater({
+      app: stubApp('1.2.4'), settings: stubSettings(), policyUrl, bundledExtension: '1.0.2',
+    });
+    await u.checkPolicy();
+    assert.strictEqual(u.extensionOutdated, false, 'nothing reported yet, nothing claimed');
+    u.noteExtension('1.0.1');
+    assert.strictEqual(u.extensionOutdated, true, 'the browser is behind the copy this build ships');
+    u.noteExtension('1.0.2');
+    assert.strictEqual(u.extensionOutdated, false, 'and now it has caught up');
+    u.noteExtension('1.0.3');
+    assert.strictEqual(u.extensionOutdated, false, 'a newer one in the browser is not dragged backwards');
+    ok('the browser copy is measured against the one the app ships');
+  }
+
+  {
     const u = new Updater({ app: stubApp('1.2.1'), settings: stubSettings(), policyUrl });
     assert.strictEqual(u.extensionOutdated, false, 'an extension never seen is not called outdated');
     await u.checkPolicy();

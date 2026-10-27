@@ -69,7 +69,7 @@ function fetchPolicy(url = POLICY_URL) {
 }
 
 class Updater extends EventEmitter {
-  constructor({ app, settings, logger, policyUrl }) {
+  constructor({ app, settings, logger, policyUrl, bundledExtension }) {
     super();
     this.app = app;
     this.settings = settings;
@@ -85,6 +85,10 @@ class Updater extends EventEmitter {
     this._api = null;
     this.policy = null;
     this.extensionVersion = '';
+    // The version of the extension this build carries in its resources. The
+    // browser keeps its own copy, and an app update does not touch it, so this
+    // is what the browser's copy ought to be once it has been reloaded.
+    this.bundledExtension = bundledExtension || '';
     this.installerState = '';  // '' | 'fetching' | 'failed'
     this.installerError = '';
   }
@@ -113,9 +117,17 @@ class Updater extends EventEmitter {
     return olderThan(this.currentVersion, this.policy && this.policy.minimumVersion);
   }
 
-  /** The browser is still running an extension older than this app expects. */
+  /**
+   * The browser is still running an older extension than this app carries.
+   *
+   * Measured against the copy in this build rather than a line in the policy
+   * file, so it stays true by itself: every app update that ships a newer
+   * add-on leaves the browser holding the previous one, and this says so
+   * without anyone having to remember to publish a new floor.
+   */
   get extensionOutdated() {
     if (!this.extensionVersion) return false; // not seen yet; nothing to claim
+    if (olderThan(this.extensionVersion, this.bundledExtension)) return true;
     return olderThan(this.extensionVersion, this.policy && this.policy.minimumExtensionVersion);
   }
 
@@ -220,6 +232,7 @@ class Updater extends EventEmitter {
       installerState: this.installerState,
       installerError: this.installerError,
       extensionVersion: this.extensionVersion,
+      bundledExtension: this.bundledExtension,
       extensionOutdated: this.extensionOutdated,
     };
   }

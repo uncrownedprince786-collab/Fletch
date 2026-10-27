@@ -392,3 +392,17 @@ code.snippet {
   list-style: decimal; padding-left: 2px;
 }
 .forced-card .acts { display: flex; gap: 9px; margin-top: 13px; }
+
+/* ----------------------------------------- the add-on the browser still has */
+
+/* A bar, not a blocking screen. What needs doing is in the browser, where
+   Fletch cannot reach, so it says so plainly and stays until it is true no
+   longer — without ever standing between anyone and their downloads. */
+#extbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 16px;
+  background: var(--bg-raised); border-top: 2px solid var(--warn);
+  box-shadow: 0 -8px 24px rgba(5, 8, 12, .5);
+}
+#extbar .what { flex: 1; font-size: 12.5px; line-height: 1.5; color: var(--text); }

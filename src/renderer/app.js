@@ -504,6 +504,41 @@ function formatDialog(task) {
 let lastUpdateState = '';
 
 /**
+ * The browser is holding an older add-on than this Fletch ships.
+ *
+ * A bar rather than a blocking screen: the app itself is fine, and the thing
+ * that needs doing is in the browser, where Fletch has no reach. It stays put
+ * until the add-on actually reports a current version, so it cannot be
+ * dismissed into being forgotten — but it never stops anyone using Fletch.
+ */
+function renderExtensionBanner(show) {
+  let bar = document.getElementById('extbar');
+  if (!show) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (bar) return;
+
+  bar = el('div');
+  bar.id = 'extbar';
+  bar.appendChild(el('span', 'what',
+    'Your browser is still running the previous Fletch add-on. Reload it there, or restart your browser, and downloads will be caught again.'));
+
+  const open = el('button', 'btn sm primary', 'Open the extensions page');
+  open.onclick = () => fletch.setup.openExtensionsPage('chrome');
+  bar.appendChild(open);
+
+  // For the case the reload cannot fix: an add-on loaded from a folder of
+  // their own, which updating Fletch never touched. This is where the current
+  // files are.
+  const folder = el('button', 'btn sm', 'Show the add-on folder');
+  folder.onclick = () => fletch.setup.openExtensionFolder();
+  bar.appendChild(folder);
+
+  document.body.appendChild(bar);
+}
+
+/**
  * The one screen Fletch will not let you past.
  *
  * Every other update is an offer: Fletch asks before spending bandwidth and
@@ -523,10 +558,17 @@ function renderForcedUpdate(s) {
   const appStale = Boolean(s && s.required);
   const extStale = Boolean(s && s.extensionOutdated);
 
-  if (!appStale && !extStale) {
+  // An out-of-date add-on on its own gets a banner, never this screen. Fletch
+  // can replace itself, so locking the window is always escapable; it cannot
+  // reach into the browser, and someone whose add-on was loaded from a folder
+  // Fletch does not control could press Reload all day without the version
+  // changing. Locking them out of the app over it would be a trap.
+  if (!appStale) {
     if (box) box.remove();
+    renderExtensionBanner(extStale);
     return;
   }
+  renderExtensionBanner(false);
 
   if (!box) {
     box = el('div');
@@ -568,7 +610,10 @@ function renderForcedUpdate(s) {
   const appStep = box.querySelector('.step.app');
   const extStep = box.querySelector('.step.ext');
   appStep.hidden = !appStale;
-  extStep.hidden = !extStale;
+  // Always shown alongside an app update. Installing a new Fletch leaves the
+  // browser holding the add-on from the old one, every time, so the reload is
+  // part of the same job rather than a separate complaint.
+  extStep.hidden = !appStale && !extStale;
 
   box.querySelector('h2').textContent = appStale
     ? 'Update Fletch to carry on'
@@ -587,9 +632,8 @@ function renderForcedUpdate(s) {
     ? '2. Reload the browser extension'
     : 'Reload the browser extension';
 
-  extStep.querySelector('.lead').textContent = appStale
-    ? 'Your browser keeps its own copy of the extension, so installing the update does not change it. Restarting your browser picks up the new one — or do it now:'
-    : 'Your browser is running an older copy of the extension than this version of Fletch expects. Restarting your browser picks up the new one — or do it now:';
+  extStep.querySelector('.lead').textContent =
+    'Your browser keeps its own copy of the add-on, so installing this does not change it. Restart your browser afterwards and it picks up the new one — or do it there now:';
 
   const line = appStep.querySelector('.state');
   const button = appStep.querySelector('.acts .primary');
