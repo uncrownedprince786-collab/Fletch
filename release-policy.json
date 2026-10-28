@@ -1,7 +1,7 @@
 {
-  "minimumVersion": "1.2.5",
-  "minimumExtensionVersion": "1.0.1",
-  "reason": "Fletch before 1.2.5 never offered to install yt-dlp, the helper that links to web pages need, so page downloads failed with an error that explained nothing. Earlier versions also had a browser add-on that could re-download your whole download history. Install this one, then restart your browser.",
+  "minimumVersion": "1.2.7",
+  "minimumExtensionVersion": "1.0.3",
+  "reason": "Fletch before 1.2.7 could download the wrong video: the grabber took a link from the page beside the player rather than the one playing, so on YouTube it fetched whatever was queued up next. It also needed helpers nobody was told to install. Install this one, then restart your browser so it picks up the new add-on.",
   "downloadUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/latest",
-  "installerUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/download/v1.2.5/Fletch-Setup-1.2.5-x64.exe"
+  "installerUrl": "https://github.com/uncrownedprince786-collab/Fletch/releases/download/v1.2.7/Fletch-Setup-1.2.7-x64.exe"
 }
