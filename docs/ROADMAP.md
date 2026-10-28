@@ -67,6 +67,22 @@ Measured on 2026-10-28, with four Fletch processes and a download running:
 | Private bytes | 320 MB |
 | Installed size | 294 MB |
 
-Ordinary for Electron, and not light. If "light" is a goal rather than a hope,
-it needs measuring properly — idle versus downloading, and where the memory
-goes — before anything is optimised. There is no point guessing at this.
+Ordinary for Electron, and not light — but memory turned out to be the wrong
+thing to measure. What was meant by light is CPU: not making the machine work
+when nothing is happening.
+
+On that, measured over 30 seconds with the window open and nothing downloading:
+
+| | |
+|---|---|
+| CPU used | 0.00 seconds |
+| Share of one core | 0.00% |
+
+So the app itself is already idle when idle, and there is nothing to fix here.
+
+The one place still worth a look is not the app but the add-on: its content
+script runs on every page, holding a MutationObserver over the whole document
+and a timer every 1.2 seconds to keep the grabber button positioned. That cost
+is paid in the browser, on every open tab, whether or not a video is there —
+and it is the only thing in the project that does work on a schedule nobody
+asked for. Measure it on a heavy page before deciding it matters.
