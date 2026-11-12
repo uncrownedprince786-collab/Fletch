@@ -79,6 +79,17 @@ async function ensurePaired(force = false) {
     const data = await res.json();
     if (!data.token) return null;
     await chrome.storage.local.set({ token: data.token, port: data.port || port });
+    // Fetch Fletch's config so the browser download fallback can save to
+    // the right folder.
+    try {
+      const cfgRes = await fetch(`http://127.0.0.1:${data.port || port}/config`, {
+        headers: { Authorization: `Bearer ${data.token}`, ...identityHeaders() },
+      });
+      if (cfgRes.ok) {
+        const cfg = await cfgRes.json();
+        if (cfg.downloadDir) await chrome.storage.local.set({ downloadDir: cfg.downloadDir });
+      }
+    } catch { /* config is optional */ }
     return data.token;
   } catch {
     return null; // app not running yet; we will try again on the next action
@@ -480,7 +491,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
         // Fletch could not download (TLS fingerprinting, 403, connection
         // reset, etc.). Fall back to the browser's own download mechanism.
         try {
-          await chrome.downloads.download({ url: msg.payload.url });
+          const cfg = await new Promise((r) => chrome.storage.local.get({ downloadDir: '' }, r));
+          const opts = { url: msg.payload.url };
+          if (cfg.downloadDir) {
+            // Extract filename from URL
+            let name = msg.payload.url.split('/').pop().split('?')[0] || 'download';
+            if (!name.includes('.')) name += '.mp4';
+            // Sanitize
+            name = name.replace(/[<>:"/\\|?*]/g, '_');
+            opts.filename = cfg.downloadDir.replace(/\\/g, '/') + '/' + name;
+          }
+          await chrome.downloads.download(opts);
           reply({ ok: true, reason: '' });
         } catch (e) {
           reply({ ok: false, reason: lastSendError || 'Download failed' });

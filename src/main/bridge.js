@@ -172,6 +172,13 @@ class Bridge {
       return this._send(res, 200, this.manager.stats());
     }
 
+    if (url === '/config' && req.method === 'GET') {
+      return this._send(res, 200, {
+        downloadDir: this.settings.get('downloadDir', ''),
+        maxConcurrent: this.manager.maxConcurrent,
+      }, echo);
+    }
+
     this._send(res, 404, { error: 'no such endpoint' });
   }
 
