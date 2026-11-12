@@ -41,6 +41,10 @@ const server = http.createServer((req, res) => {
 
   const f = FILES[url];
   if (!f) { res.writeHead(404).end(); return; }
+  // `?slow=1` dribbles a small file deliberately: on a fast loopback a 3 MB
+  // download can finish between two 100 ms polls, which makes "pause it while
+  // it is running" impossible to test honestly.
+  const slow = /[?&]slow=1/.test(req.url);
   const m = /bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
   const total = f.body.length;
   const start = m ? Number(m[1]) : 0;
@@ -59,7 +63,7 @@ const server = http.createServer((req, res) => {
     const n = Math.min(128 * 1024, end - pos + 1);
     res.write(f.body.subarray(pos, pos + n));
     pos += n;
-    setTimeout(tick, 6);
+    setTimeout(tick, slow ? 400 : 6);
   };
   tick();
 });
@@ -135,7 +139,10 @@ server.listen(0, '127.0.0.1', async () => {
 
     // ---- pause / resume mid-flight ----
     mgr.clearCompleted();
-    const t = await mgr.add(base + '/clip.mp4', { allowDuplicate: true });
+    // Same problem as the cancel test below: on a fast loopback the file is
+    // done before a 100 ms poll sees it running. The slow variant keeps it in
+    // flight long enough for the pause to mean something.
+    const t = await mgr.add(base + '/clip.mp4?slow=1', { allowDuplicate: true });
     await until(() => t.state === 'running' && t.downloaded > 200 * 1024, 'download under way');
     mgr.pause(t.id);
     await until(() => t.state === 'paused', 'paused');
