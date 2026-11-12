@@ -1008,12 +1008,26 @@ function settingsDialog() {
     row.appendChild(a);
     const b = el('div');
     numberField(b, 'maxConcurrent', 'Downloads at once',
-      'Beyond this, new links wait in the queue.', 1, 16);
+      'Beyond this, new links wait in the queue.', 1, 32);
     row.appendChild(b);
     p.appendChild(row);
 
     numberField(p, 'speedLimitKbps', 'Speed limit (KB/s)',
       'Across every download at once. Set to 0 to leave it uncapped.', 0, 1024 * 1024);
+
+    p.appendChild(el('p', null,
+      'Torrents. These decide how the swarm is allowed to find you. Trackers still do the work, so everything that downloads today keeps downloading; only a link that carries no trackers at all borrows the DHT for that one download.'));
+
+    checkField(p, 'torrentDht', 'Allow the DHT network',
+      'A public index of who holds which torrent. Off keeps your IP out of it.');
+    checkField(p, 'torrentPex', 'Allow peer exchange (PEX)',
+      'Lets peers pass your address around the swarm. Off by default.');
+    checkField(p, 'torrentLsd', 'Allow local peer discovery (LSD)',
+      'Announces downloads to other devices on your own network. Off by default.');
+    checkField(p, 'torrentUpnp', 'Open a port on the router (UPnP)',
+      'On keeps speeds up. The port closes again when nothing is downloading.');
+    numberField(p, 'torrentUploadKbps', 'Upload cap (KB/s)',
+      '0 leaves it uncapped, which is what keeps the download fast.', 0, 102400);
 
     const qf = el('label', 'field');
     qf.appendChild(el('span', 'lab', 'Default video quality'));

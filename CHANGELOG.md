@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.8
+
+- Torrents are private by default. DHT, peer exchange and local discovery all
+  advertise what is being downloaded, so all three are now off; trackers still
+  connect you to the swarm, which is why the magnets that worked yesterday work
+  today. A magnet that carries no trackers at all borrows the DHT for that one
+  download, so a click never ends in "finding peers" forever. All four are
+  switches in Settings → Speed for anyone who wants them back.
+- The router is left alone when nothing is running. UPnP and NAT-PMP stay on
+  while a torrent is active, because an open port is worth real throughput, and
+  the client is torn down the moment the queue empties, which closes the port
+  and drops the mapping with it.
+- Ten downloads at once, up from three. Torrents inside one magnet were always
+  fetched in parallel; separate magnets were the ones waiting their turn.
+- The grabber button starts Fletch when it is not running. The add-on talks to
+  the app over loopback, so with the app closed the click had nowhere to go; it
+  now hands the link to Windows through `fletch://`, which launches Fletch with
+  the download attached.
+
 ## 1.2.7
 
 - The grabber downloads the video you are watching. On a YouTube watch page it

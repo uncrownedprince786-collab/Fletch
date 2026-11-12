@@ -7,7 +7,7 @@ const { EventEmitter } = require('events');
 
 const { HttpDownload } = require('./http-download');
 const { HlsDownload, inspect: inspectHls } = require('./hls');
-const { TorrentDownload, isTorrentSource, nameFromMagnet } = require('./torrent');
+const { TorrentDownload, isTorrentSource, nameFromMagnet, hasTrackers, configureClient, destroyClient } = require('./torrent');
 const { probe } = require('./probe');
 const ytdlp = require('./ytdlp');
 const merge = require('./merge');
@@ -75,7 +75,7 @@ class DownloadManager extends EventEmitter {
 
   // ---- settings ------------------------------------------------------------
 
-  get maxConcurrent() { return Math.max(1, this.settings.get('maxConcurrent', 3)); }
+  get maxConcurrent() { return Math.max(1, this.settings.get('maxConcurrent', 10)); }
   get connections() { return Math.max(1, Math.min(32, this.settings.get('connections', 8))); }
   get downloadDir() {
     return this.settings.get('downloadDir') || path.join(os.homedir(), 'Downloads', 'Fletch');
@@ -88,6 +88,41 @@ class DownloadManager extends EventEmitter {
       'yt-dlp': this.settings.get('ytdlpPath', ''),
       ffmpeg: this.settings.get('ffmpegPath', ''),
     });
+
+    // Torrent privacy. Upload is capped in KB/s; 0 means "leave it uncapped",
+    // because starving upload starves the download that depends on it.
+    const privacy = this.torrentPrivacy;
+    const uploadKbps = Number(this.settings.get('torrentUploadKbps', 0)) || 0;
+    configureClient({
+      dht: privacy.dht,
+      lsd: privacy.lsd,
+      utPex: privacy.utPex,
+      natUpnp: privacy.natUpnp,
+      natPmp: privacy.natPmp,
+      uploadLimit: uploadKbps > 0 ? uploadKbps * 1024 : -1,
+      maxConns: this.torrentConnections,
+    });
+  }
+
+  /** What the torrent client is allowed to do. Off means private. */
+  get torrentPrivacy() {
+    return {
+      dht: this.settings.get('torrentDht', false) === true,
+      lsd: this.settings.get('torrentLsd', false) === true,
+      utPex: this.settings.get('torrentPex', false) === true,
+      // UPnP stays on for speed; the mapping is released when the queue empties.
+      natUpnp: this.settings.get('torrentUpnp', true) !== false,
+      natPmp: this.settings.get('torrentUpnp', true) !== false,
+    };
+  }
+
+  /**
+   * A connection pool that grows with the queue. One torrent at 80 peers is
+   * plenty; ten torrents sharing one pool is not.
+   */
+  get torrentConnections() {
+    const perTorrent = Number(this.settings.get('torrentMaxPeers', 80)) || 80;
+    return Math.max(40, Math.min(160, perTorrent * Math.ceil(this.maxConcurrent / 3)));
   }
 
   targetFolder(category) {
@@ -646,7 +681,7 @@ class DownloadManager extends EventEmitter {
       task.speed = p.speed || 0;
       task.connections = p.connections || 0;
       task.segments = p.segments || [];
-      task.note = p.note || '';
+      task.note = [p.note, task.noteExtra].filter(Boolean).join(' · ');
       const total = totalOverride || (p.size ? offset + p.size : null);
       if (total) task.size = total;
       task.progress = task.size ? Math.min(1, task.downloaded / task.size) : (p.progress || 0);
@@ -721,12 +756,20 @@ class DownloadManager extends EventEmitter {
   }
 
   async _runTorrent(task) {
+    const privacy = this.torrentPrivacy;
+    // A magnet with no tracker links has nothing but the DHT to ask, so DHT is
+    // borrowed for that download alone. Everything else stays private.
+    const trackerless = isTorrentSource(task.sourceUrl) && !hasTrackers(task.sourceUrl);
+    const useDht = trackerless && !privacy.dht;
+    if (useDht) task.noteExtra = 'No trackers in this link — DHT used for this download.';
+
     const dl = new TorrentDownload({
       url: task.sourceUrl,
       dir: task.folder,
-      maxConns: Math.max(20, Number(this.settings.get('torrentMaxPeers', 80)) || 80),
+      maxConns: this.torrentConnections,
       addPeers: task.addPeers || [],
       announce: task.announce,
+      useDht,
       metadataTimeout: Math.max(10, Number(this.settings.get('torrentMetadataSeconds', 90)) || 90) * 1000,
     });
 
@@ -745,13 +788,34 @@ class DownloadManager extends EventEmitter {
     });
 
     this._wire(task, dl);
-    const res = await dl.start();
+    let res;
+    try {
+      res = await dl.start();
 
-    // Seeding is opt-in: most people want the file, not an upload obligation.
-    if (res && res.filePath && !this.settings.get('keepSeeding', false)) {
-      await dl.stopSeeding().catch(() => {});
+      // Seeding is opt-in: most people want the file, not an upload obligation.
+      if (res && res.filePath && !this.settings.get('keepSeeding', false)) {
+        await dl.stopSeeding().catch(() => {});
+      }
+    } finally {
+      // Nothing left to share: drop the client so the listening port closes and
+      // the router mapping goes with it. Downloads in flight keep their own,
+      // and a torrent that only paused still needs its client to resume.
+      const pausedHere = Boolean(res && res.paused);
+      const stillSeeding = this.settings.get('keepSeeding', false) === true;
+      if (!pausedHere && !stillSeeding && !this._hasLiveTorrents(task.id)) {
+        await destroyClient().catch(() => {});
+      }
     }
     return res;
+  }
+
+  /** Any torrent still using the client, ignoring the one that just stopped. */
+  _hasLiveTorrents(exceptId = '') {
+    for (const task of this.tasks.values()) {
+      if (task.id === exceptId) continue;
+      if (task.engine === 'torrent' && (task.state === 'running' || task.state === 'paused')) return true;
+    }
+    return false;
   }
 
   async _runYtDlp(task) {

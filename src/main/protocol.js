@@ -71,8 +71,8 @@ async function writeUserAssociation(exePath) {
 }
 
 /** The command string the current user's magnet association points at. */
-async function readUserAssociation() {
-  const { ok, out } = await reg(['query', KEY, '/ve']);
+async function readUserAssociation(key = KEY) {
+  const { ok, out } = await reg(['query', key, '/ve']);
   if (!ok) return null;
   const m = /REG_SZ\s+(.+)/i.exec(out);
   return m ? m[1].trim() : null;
@@ -139,4 +139,67 @@ async function ensureMagnetHandler({ app, enabled = true }) {
   return { state: stale ? 'repaired-stale' : 'taken-over', from: target };
 }
 
-module.exports = { ensureMagnetHandler, readUserAssociation, exePathFrom };
+/**
+ * Claim `fletch://` so the browser add-on can hand over a link even when Fletch
+ * is not running. The bridge is loopback-only, so a closed app has nothing to
+ * POST to; Windows launching us with the link is the way back in.
+ */
+const FLETCH_KEY = 'HKCU\\Software\\Classes\\fletch';
+
+async function writeFletchAssociation(exePath) {
+  const body = [
+    'Windows Registry Editor Version 5.00',
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Classes\\fletch]',
+    '@="URL:Fletch Protocol"',
+    '"URL Protocol"=""',
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Classes\\fletch\\DefaultIcon]',
+    `@="${regEscape(exePath)},0"`,
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Classes\\fletch\\shell\\open\\command]',
+    `@="${regEscape(`"${exePath}" "%1"`)}"`,
+    '',
+  ].join('\r\n');
+
+  const file = path.join(os.tmpdir(), `fletch-protocol-${Date.now()}.reg`);
+  try {
+    await fsp.writeFile(file, '\ufeff' + body, 'ucs2');
+    const res = await reg(['import', file]);
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    await fsp.rm(file, { force: true }).catch(() => {});
+  }
+}
+
+async function ensureFletchHandler({ app } = {}) {
+  if (process.platform !== 'win32') {
+    try {
+      app.setAsDefaultProtocolClient('fletch');
+      return { state: 'registered' };
+    } catch (err) {
+      return { state: 'failed', error: err.message };
+    }
+  }
+
+  // In development the executable is electron.exe, which must not end up as
+  // the system-wide handler for everyone's links.
+  if (!app || !app.isPackaged) return { state: 'skipped-dev' };
+
+  const self = process.execPath;
+  if (!await writeFletchAssociation(self)) {
+    return { state: 'failed', error: 'could not write the association' };
+  }
+
+  const after = exePathFrom(await readUserAssociation(FLETCH_KEY));
+  if (after.toLowerCase() !== self.toLowerCase()) {
+    return { state: 'failed', error: `association points at ${after || 'nothing'}` };
+  }
+  return { state: 'registered' };
+}
+
+module.exports = {
+  ensureMagnetHandler, ensureFletchHandler, readUserAssociation, exePathFrom,
+};

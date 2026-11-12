@@ -12,19 +12,43 @@ const { DownloadManager } = require('./engine/manager');
 const { Binaries, defaultBinDir, FFMPEG_HINTS } = require('./engine/binaries');
 const { Bridge } = require('./bridge');
 const { Updater } = require('./updater');
-const { ensureMagnetHandler } = require('./protocol');
+const { ensureMagnetHandler, ensureFletchHandler } = require('./protocol');
 const { isHttpUrl, looksLikeMediaUrl } = require('./engine/util');
 const { isTorrentSource } = require('./engine/torrent');
 
-/** Anything on a command line that Fletch could take as a download. */
+/**
+ * Pull the real link out of a `fletch://grab?u=...` hand-off.
+ *
+ * URLSearchParams already decodes the value, so decoding again would eat a
+ * literal `%20` inside the original link.
+ */
+function unwrapProtocolLink(value) {
+  const raw = String(value || '').trim();
+  if (!/^fletch:\/\//i.test(raw)) return raw;
+  try {
+    const parsed = new URL(raw);
+    const inner = parsed.searchParams.get('u') || parsed.searchParams.get('url') || '';
+    if (isHttpUrl(inner) || isTorrentSource(inner)) return inner;
+    // Some launchers pass the link still encoded, so try once more.
+    const again = decodeURIComponent(inner);
+    return (isHttpUrl(again) || isTorrentSource(again)) ? again : inner;
+  } catch {
+    return '';
+  }
+}
+
 function linkFromArgv(argv) {
-  return (argv || []).find((a) => isHttpUrl(a) || isTorrentSource(a)) || null;
+  for (const arg of argv || []) {
+    const link = unwrapProtocolLink(arg);
+    if (isHttpUrl(link) || isTorrentSource(link)) return link;
+  }
+  return null;
 }
 
 const DEFAULTS = {
   downloadDir: path.join(os.homedir(), 'Downloads', 'Fletch'),
   connections: 8,
-  maxConcurrent: 3,
+  maxConcurrent: 10,
   speedLimitKbps: 0,
   sortIntoCategories: true,
   maxHeight: 0,
@@ -35,6 +59,15 @@ const DEFAULTS = {
   startPaused: false,
   cookiesFromBrowser: '',
   proxy: '',
+  // Torrent privacy. DHT, peer exchange and local discovery all advertise what
+  // is being downloaded; they are off unless someone turns them back on.
+  // UPnP stays on because it buys real throughput, and the mapping is dropped
+  // as soon as the queue is empty.
+  torrentDht: false,
+  torrentPex: false,
+  torrentLsd: false,
+  torrentUpnp: true,
+  torrentUploadKbps: 0,
   ytdlpPath: '',
   ffmpegPath: '',
   // Fletch fetches yt-dlp and ffmpeg itself and keeps them current. Off means
@@ -512,13 +545,21 @@ if (!gotLock) {
   // macOS delivers magnet: and other protocol links this way.
   app.on('open-url', (e, url) => {
     e.preventDefault();
-    if (manager && (isHttpUrl(url) || isTorrentSource(url))) manager.add(url).catch(() => {});
+    const link = unwrapProtocolLink(url);
+    if (manager && (isHttpUrl(link) || isTorrentSource(link))) manager.add(link).catch(() => {});
     showWindow();
   });
 
   app.whenReady().then(async () => {
     settings = new JsonStore(path.join(userData, 'settings.json'), DEFAULTS);
     settings.load();
+
+    // 1.2.8 raised the default queue from 3 to 10. Move only a value that is
+    // still the old default, so a deliberate choice is never overwritten.
+    if (!settings.get('queueCeilingRaised', false)) {
+      if (Number(settings.get('maxConcurrent', 3)) === 3) settings.set('maxConcurrent', 10);
+      settings.set('queueCeilingRaised', true);
+    }
     tasksStore = new JsonStore(path.join(userData, 'downloads.json'), { tasks: [] });
     tasksStore.load();
 
@@ -624,6 +665,10 @@ if (!gotLock) {
       app,
       enabled: settings.get('handleMagnetLinks', true),
     }).catch((err) => ({ state: 'failed', error: err.message }));
+
+    // `fletch://` is how the browser add-on reaches a copy of Fletch that is not
+    // running yet: the bridge is unreachable, so it asks Windows to start us.
+    await ensureFletchHandler({ app }).catch(() => ({ state: 'failed' }));
 
     updater.startBackgroundChecks();
 

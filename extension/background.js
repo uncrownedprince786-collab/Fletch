@@ -88,6 +88,33 @@ async function ensurePaired(force = false) {
 chrome.runtime.onInstalled.addListener(() => { ensurePaired(); });
 chrome.runtime.onStartup.addListener(() => { ensurePaired(); });
 
+/**
+ * Ask Windows to start Fletch with a link.
+ *
+ * The bridge listens on loopback and only while Fletch is running, so a closed
+ * app has nothing to POST to. `fletch://` is registered by the app itself:
+ * opening it hands the link to Windows, which launches Fletch. The browser asks
+ * once whether to allow the protocol, then it is a single click every time.
+ */
+async function launchFletch(link) {
+  const clean = String(link || '').trim();
+  if (!clean) return false;
+  try {
+    const tab = await chrome.tabs.create({
+      url: `fletch://grab?u=${encodeURIComponent(clean)}`,
+      active: false,
+    });
+    if (tab && tab.id !== undefined) {
+      // Chrome needs the tab to stay alive long enough to hand the link over;
+      // afterwards it is only clutter.
+      setTimeout(() => { chrome.tabs.remove(tab.id).catch(() => {}); }, 1500);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function send(payload, quiet = false) {
   const cfg = await config();
   const port = cfg.port;
@@ -100,10 +127,17 @@ async function send(payload, quiet = false) {
     if (cookies.length) payload = { ...payload, cookies };
   }
   if (!token) {
+    // Not paired means the app is not there to pair with. Hand the link to
+    // Windows so Fletch starts and takes it, rather than dropping the click.
+    if (await launchFletch(payload && payload.url)) {
+      lastSendError = '';
+      if (!quiet) notify('Opening Fletch', 'Fletch is starting and will take this download.');
+      return { launched: true, added: [] };
+    }
     lastSendError = 'not paired with Fletch';
     if (!quiet) {
       notify('Fletch is not running',
-        'Start Fletch and try again. It pairs with this extension by itself.');
+        'Start Fletch once; after that this button starts it for you.');
     }
     return null;
   }
@@ -138,8 +172,15 @@ async function send(payload, quiet = false) {
     if (!quiet) notify('Sent to Fletch', n === 1 ? (data.added[0].title || 'Queued.') : `${n} links queued.`);
     return data;
   } catch (err) {
+    // The app was closed between the pairing check and the request, or the
+    // port moved. Either way, ask Windows to start it with this link.
+    if (await launchFletch(payload && payload.url)) {
+      lastSendError = '';
+      if (!quiet) notify('Opening Fletch', 'Fletch is starting and will take this download.');
+      return { launched: true, added: [] };
+    }
     lastSendError = 'Fletch is not running';
-    if (!quiet) notify('Could not reach Fletch', 'Make sure the Fletch app is running, then try again.');
+    if (!quiet) notify('Could not reach Fletch', 'Start Fletch once and it will pair by itself.');
     return null;
   }
 }

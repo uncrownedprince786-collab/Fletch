@@ -7,30 +7,93 @@ const { EventEmitter } = require('events');
 // time a torrent is actually started. That keeps a fairly heavy dependency out
 // of startup for the many people who never touch a magnet link.
 
-let clientPromise = null;
+// How the swarm is allowed to find us is a privacy decision, not a constant.
+//
+// DHT is a public, crawlable index of who holds which torrent: leave it on and
+// anyone scraping that index can tie an IP to a file. Peer exchange and local
+// discovery widen the swarm the same way, so both are off. Trackers still do
+// their job, which is why every link that already worked keeps working.
+//
+// UPnP stays on because it is worth real throughput, and the mapping is dropped
+// again the moment nothing is downloading (see releaseClient).
+const clientSettings = {
+  dht: false,
+  lsd: false,
+  utPex: false,
+  natUpnp: true,
+  natPmp: true,
+  uploadLimit: -1, // -1 = uncapped. Throttling upload to 0 slows the download.
+  maxConns: 80,
+};
+
+let clientGeneration = 0;
+const clients = new Map(); // "<generation>:<privacy|dht>" -> Promise<WebTorrent>
+
+function applyUploadLimit(client) {
+  if (!client || client.destroyed) return;
+  try { client.throttleUpload(clientSettings.uploadLimit); } catch { /* older client */ }
+}
+
+/**
+ * Change what new torrent clients are allowed to do.
+ *
+ * Options such as DHT are fixed when a client is constructed, so a change bumps
+ * the generation. Running downloads keep their client; the next one built picks
+ * up the new settings, and nothing in flight is torn down.
+ */
+function configureClient(patch = {}) {
+  let structural = false;
+  for (const key of ['dht', 'lsd', 'utPex', 'natUpnp', 'natPmp']) {
+    if (patch[key] !== undefined && Boolean(patch[key]) !== clientSettings[key]) {
+      clientSettings[key] = Boolean(patch[key]);
+      structural = true;
+    }
+  }
+  if (patch.uploadLimit !== undefined) clientSettings.uploadLimit = Number(patch.uploadLimit);
+  if (patch.maxConns !== undefined) clientSettings.maxConns = Number(patch.maxConns);
+  if (structural) clientGeneration += 1;
+  for (const pending of clients.values()) {
+    pending.then((client) => { if (client) applyUploadLimit(client); }).catch(() => {});
+  }
+}
 
 async function getClient(opts = {}) {
-  if (!clientPromise) {
-    clientPromise = (async () => {
+  const useDht = opts.useDht === undefined ? clientSettings.dht : Boolean(opts.useDht);
+  const key = `${clientGeneration}:${useDht ? 'dht' : 'privacy'}`;
+  let pending = clients.get(key);
+  if (!pending) {
+    pending = (async () => {
       const { default: WebTorrent } = await import('webtorrent');
       return new WebTorrent({
-        maxConns: Math.max(10, Math.min(200, opts.maxConns || 80)),
-        dht: true,
-        // Peer exchange and local discovery both widen the swarm, which is
-        // most of what "as fast as possible" means for a torrent.
-        lsd: true,
-        utPex: true,
+        maxConns: Math.max(10, Math.min(200, opts.maxConns || clientSettings.maxConns)),
+        dht: useDht,
+        lsd: clientSettings.lsd,
+        utPex: clientSettings.utPex,
+        natUpnp: clientSettings.natUpnp,
+        natPmp: clientSettings.natPmp,
+        uploadLimit: clientSettings.uploadLimit,
       });
     })();
+    clients.set(key, pending);
   }
-  return clientPromise;
+  return pending;
 }
 
 async function destroyClient() {
-  if (!clientPromise) return;
-  const client = await clientPromise.catch(() => null);
-  clientPromise = null;
-  if (client) await new Promise((r) => client.destroy(() => r()));
+  const pending = [...clients.values()];
+  clients.clear();
+  clientGeneration += 1;
+  await Promise.all(pending.map((p) => p
+    .then((client) => client && new Promise((r) => client.destroy(() => r())))
+    .catch(() => null)));
+}
+
+/** True when a magnet carries tracker links of its own. */
+function hasTrackers(value) {
+  const v = String(value || '');
+  // A .torrent file brings its own tracker list, so it never needs DHT.
+  if (/^https?:/i.test(v)) return true;
+  return /[?&]tr=/i.test(v);
 }
 
 function isTorrentSource(value) {
@@ -71,6 +134,10 @@ class TorrentDownload extends EventEmitter {
     this.addPeers = spec.addPeers || [];
     this.announce = spec.announce;
     this.metadataTimeout = spec.metadataTimeout || 90000;
+    // A magnet with no trackers at all has nothing to ask but the DHT, so it
+    // gets DHT for itself rather than failing with "no peers answered".
+    this.useDht = Boolean(spec.useDht);
+    this.client = null;
 
     this.state = 'idle';
     this.downloaded = 0;
@@ -114,7 +181,7 @@ class TorrentDownload extends EventEmitter {
     this.torrent = null;
     if (!t) return;
     try {
-      const client = await getClient({ maxConns: this.maxConns });
+      const client = this.client || await getClient({ maxConns: this.maxConns, useDht: this.useDht });
       await new Promise((r) => client.remove(t, { destroyStore }, () => r()));
     } catch { /* already gone */ }
   }
@@ -124,7 +191,8 @@ class TorrentDownload extends EventEmitter {
     this._stop = null;
     await fsp.mkdir(this.dir, { recursive: true });
 
-    const client = await getClient({ maxConns: this.maxConns });
+    const client = await getClient({ maxConns: this.maxConns, useDht: this.useDht });
+    this.client = client;
 
     const existing = client.torrents.find((t) => t.magnetURI === this.source || t.infoHash === this.source);
     const torrent = existing || client.add(this.source, {
@@ -274,4 +342,7 @@ class TorrentDownload extends EventEmitter {
   }
 }
 
-module.exports = { TorrentDownload, isTorrentSource, nameFromMagnet, destroyClient, FALLBACK_TRACKERS };
+module.exports = {
+  TorrentDownload, isTorrentSource, nameFromMagnet, hasTrackers,
+  configureClient, getClient, destroyClient, FALLBACK_TRACKERS,
+};

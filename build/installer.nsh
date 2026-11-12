@@ -23,6 +23,17 @@
   WriteRegStr HKLM "Software\Classes\magnet\DefaultIcon" "" "$INSTDIR\Fletch.exe,0"
   WriteRegStr HKLM "Software\Classes\magnet\shell\open\command" "" '"$INSTDIR\Fletch.exe" "%1"'
 
+  ; --- fletch://, used by the browser add-on to start Fletch with a link ---
+  WriteRegStr HKLM "Software\Classes\Fletch.Link" "" "Fletch Link"
+  WriteRegStr HKLM "Software\Classes\Fletch.Link" "URL Protocol" ""
+  WriteRegStr HKLM "Software\Classes\Fletch.Link\DefaultIcon" "" "$INSTDIR\Fletch.exe,0"
+  WriteRegStr HKLM "Software\Classes\Fletch.Link\shell\open\command" "" '"$INSTDIR\Fletch.exe" "%1"'
+
+  WriteRegStr HKLM "Software\Classes\fletch" "" "URL:Fletch Protocol"
+  WriteRegStr HKLM "Software\Classes\fletch" "URL Protocol" ""
+  WriteRegStr HKLM "Software\Classes\fletch\DefaultIcon" "" "$INSTDIR\Fletch.exe,0"
+  WriteRegStr HKLM "Software\Classes\fletch\shell\open\command" "" '"$INSTDIR\Fletch.exe" "%1"'
+
   ; --- declare the capability, so Windows lists Fletch in Default apps ---
   ;
   ; Windows 11 will not let a program make itself the handler for a protocol
@@ -33,12 +44,15 @@
   WriteRegStr HKLM "Software\Fletch\Capabilities" "ApplicationName" "Fletch"
   WriteRegStr HKLM "Software\Fletch\Capabilities" "ApplicationDescription" "Download manager"
   WriteRegStr HKLM "Software\Fletch\Capabilities\UrlAssociations" "magnet" "Fletch.Magnet"
+  WriteRegStr HKLM "Software\Fletch\Capabilities\UrlAssociations" "fletch" "Fletch.Link"
   WriteRegStr HKLM "Software\RegisteredApplications" "Fletch" "Software\Fletch\Capabilities"
 !macroend
 
 !macro customUnInstall
   DeleteRegKey HKLM "Software\Classes\Fletch.Magnet"
+  DeleteRegKey HKLM "Software\Classes\Fletch.Link"
   DeleteRegKey HKLM "Software\Classes\magnet"
+  DeleteRegKey HKLM "Software\Classes\fletch"
   DeleteRegKey HKLM "Software\Fletch"
   DeleteRegValue HKLM "Software\RegisteredApplications" "Fletch"
 !macroend
