@@ -2,6 +2,11 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { Readable } = require('stream');
+const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { UA_DESKTOP } = require('./util');
 
 // Keep sockets warm: a fresh TLS handshake per segment would eat most of the
@@ -51,12 +56,66 @@ function pickCookies(setCookie, jar) {
   return [...map].map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
+function isConnectionError(err) {
+  const msg = String(err && err.message || err || '').toLowerCase();
+  // Only fall back to PowerShell for TLS fingerprinting / connection reset.
+  // Do NOT fall back for timeouts, stalls, or HTTP errors — those are handled
+  // by the HTTP downloader's own retry logic.
+  return /econnreset|connection (reset|aborted)|tls (handshake|certificate)|unable to (verify|get local issuer)/i.test(msg);
+}
+
+/**
+ * Fetch a URL using Windows' native HTTP stack (PowerShell / Schannel).
+ * This bypasses Node.js's TLS fingerprint, which some sites block.
+ * Returns a Buffer with the response body.
+ */
+function fetchViaPowerShell(url, opts = {}) {
+  const timeout = opts.timeout || 30000;
+  const tmpFile = path.join(os.tmpdir(), `fletch-ps-${Date.now()}-${Math.random().toString(36).slice(2)}.bin`);
+  const escapedUrl = url.replace(/'/g, "''");
+  const escapedFile = tmpFile.replace(/'/g, "''");
+  const escapedUA = UA_DESKTOP.replace(/'/g, "''");
+  const script = [
+    `$ProgressPreference = 'SilentlyContinue'`,
+    `try {`,
+    `  Invoke-WebRequest -Uri '${escapedUrl}' -OutFile '${escapedFile}' -UseBasicParsing -TimeoutSec ${Math.round(timeout / 1000)} -UserAgent '${escapedUA}' -ErrorAction Stop | Out-Null`,
+    `  Write-Output 'OK'`,
+    `} catch {`,
+    `  Write-Output "ERR: $($_.Exception.Message)"`,
+    `}`,
+  ].join('; ');
+  let result;
+  try {
+    result = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
+      timeout: timeout + 10000,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+  } catch (err) {
+    try { fs.unlinkSync(tmpFile); } catch { /* gone */ }
+    throw new Error(`PowerShell fetch failed: ${err.message}`);
+  }
+  const output = String(result || '').trim();
+  if (!output.startsWith('OK')) {
+    try { fs.unlinkSync(tmpFile); } catch { /* gone */ }
+    throw new Error(output || 'PowerShell fetch failed');
+  }
+  if (!fs.existsSync(tmpFile)) throw new Error('PowerShell fetch produced no output file');
+  const buf = fs.readFileSync(tmpFile);
+  try { fs.unlinkSync(tmpFile); } catch { /* gone */ }
+  return buf;
+}
+
 /**
  * Issue a request, following redirects by hand so we keep the final URL and any
  * cookies the hops handed us. Resolves with the live response — the caller owns
  * draining or destroying it.
+ *
+ * If Node.js's request fails with a connection error (ECONNRESET etc.), the
+ * request is retried through PowerShell's native HTTP stack, which uses
+ * Windows Schannel and is not blocked by TLS fingerprinting.
  */
-function request(url, opts = {}) {
+function requestNode(url, opts = {}) {
   const {
     method = 'GET',
     headers = {},
@@ -128,14 +187,52 @@ function request(url, opts = {}) {
   });
 }
 
+function request(url, opts = {}) {
+  return requestNode(url, opts).catch((err) => {
+    if (isConnectionError(err)) {
+      // Fall back to Windows' native HTTP stack (Schannel). This bypasses
+      // TLS fingerprinting that blocks Node.js on some hosts.
+      try {
+        const buf = fetchViaPowerShell(url, opts);
+        // Return a mock response stream so callers (fetchText, fetchBuffer,
+        // and the HTTP downloader) work unchanged. Defer the push so the
+        // caller has time to attach 'data'/'end' listeners.
+        const res = new Readable({
+          read() {
+            if (!this._pushed) {
+              this._pushed = true;
+              process.nextTick(() => {
+                this.push(buf);
+                this.push(null);
+              });
+            }
+          }
+        });
+        res.statusCode = 200;
+        res.headers = { 'content-length': String(buf.length) };
+        res.finalUrl = url;
+        res.cookieJar = '';
+        return res;
+      } catch (psErr) {
+        throw new Error(`Node.js: ${err.message}; PowerShell: ${psErr.message}`);
+      }
+    }
+    throw err;
+  });
+}
+
 /** Read a whole response into memory. For playlists and API calls, never media. */
 async function fetchText(url, opts = {}) {
   const limit = opts.maxBytes || 16 * 1024 * 1024;
   const res = await request(url, opts);
   const code = res.statusCode || 0;
   if (code < 200 || code >= 300) {
-    res.resume();
+    if (res.resume) res.resume();
     throw new Error(`HTTP ${code} for ${url}`);
+  }
+  // If it's a mock stream (from PowerShell), data is already in memory.
+  if (res._readableState && res._readableState.ended) {
+    // Already consumed; shouldn't happen but guard.
   }
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -155,7 +252,7 @@ async function fetchBuffer(url, opts = {}) {
   const res = await request(url, opts);
   const code = res.statusCode || 0;
   if (code < 200 || code >= 300) {
-    res.resume();
+    if (res.resume) res.resume();
     throw new Error(`HTTP ${code} for ${url}`);
   }
   return new Promise((resolve, reject) => {

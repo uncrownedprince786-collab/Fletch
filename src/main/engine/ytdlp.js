@@ -284,7 +284,7 @@ function toBytes(n, unit) {
 /** Which engine should handle a given format's URL. */
 function engineFor(format) {
   const p = (format.protocol || '').toLowerCase();
-  if (/m3u8/.test(p) || /\.m3u8(\?|$)/i.test(format.url || '')) return 'hls';
+  if (/m3u8/.test(p) || /\.m3u8([\/?#]|$)/i.test(format.url || '')) return 'hls';
   if (p === 'http' || p === 'https' || p === '') return 'http';
   return 'ytdlp'; // dash segments, rtmp, rtsp, ism, ...
 }

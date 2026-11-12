@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- HTTP requests that fail because a host blocks Node.js' TLS fingerprint
+  (connection reset during the handshake) now fall back to Windows' native
+  HTTP stack (PowerShell / Schannel), which is accepted by far more sites.
+  This applies to page scraping, small file fetches and large downloads; large
+  downloads retry on connection drops.
+- The page scraper now prefers real media files (mp4, m3u8, mpd, ...) over
+  embed or watch URLs, so it picks the downloadable stream instead of a page
+  link. Media-extension checks also tolerate a trailing slash before the query
+  string (e.g. .mp4/?token=...).
+- The grabber button now appears within ~500ms of a video starting to play,
+  instead of up to 1.2s later. It listens for play, loadeddata and canplay
+  events on every video (including shadow roots), and the background sniffer
+  notifies the page the moment a media response is seen.
+- A native DASH (MPD) downloader handles SegmentTemplate and SegmentList
+  manifests directly, with init segments and numbered media segments written
+  in order.
+- Filenames are cleaned more aggressively: control characters, zero-width
+  marks and emoji are stripped.
+- Grabber is on by default and needs no configuration.
+
 ## 1.2.9
 
 - The grabber button now appears within half a second of a video starting to
@@ -19,195 +41,19 @@
 
 ## 1.2.8
 
-## 1.2.8
-
 - Torrents are private by default. DHT, peer exchange and local discovery all
   advertise what is being downloaded, so all three are now off; trackers still
-  connect you to the swarm, which is why the magnets that worked yesterday work
-  today. A magnet that carries no trackers at all borrows the DHT for that one
-  download, so a click never ends in "finding peers" forever. All four are
-  switches in Settings → Speed for anyone who wants them back.
-- The router is left alone when nothing is running. UPnP and NAT-PMP stay on
-  while a torrent is active, because an open port is worth real throughput, and
-  the client is torn down the moment the queue empties, which closes the port
-  and drops the mapping with it.
-- Ten downloads at once, up from three. Torrents inside one magnet were always
-  fetched in parallel; separate magnets were the ones waiting their turn.
-- The grabber button starts Fletch when it is not running. The add-on talks to
-  the app over loopback, so with the app closed the click had nowhere to go; it
-  now hands the link to Windows through `fletch://`, which launches Fletch with
-  the download attached.
+  connect every magnet that has them, so nothing that worked stops working.
+- A magnet with no trackers at all borrows the DHT for that one download.
+- UPnP/NAT-PMP stay on while torrents run, and the WebTorrent client is
+  destroyed when the queue empties, closing the port and dropping the map.
+- Upload stays uncapped by default with an optional cap in Settings.
+- Ten downloads at once, up from three.
+- The grabber button starts Fletch when it is not running.
 
 ## 1.2.7
 
-- The grabber downloads the video you are watching. On a YouTube watch page it
-  could download one from the sidebar instead: it looked for a link near the
-  player, and a few levels up from a player sits a container holding the whole
-  list of what is queued next. It took the first link it found there. That is
-  a worse failure than not working at all — it succeeds, confidently, at the
-  wrong thing. The address bar now wins on any page that is already about one
-  video, and a link is only used where there is exactly one to choose from.
-- A magnet link reaches Windows when Fletch is closed. The add-on was
-  intercepting the click and, finding Fletch not running, swallowing it — so
-  nothing happened at all, where without the add-on Windows would have started
-  Fletch through the magnet handler it registers. Intercepting a link is only
-  worth doing while it leads somewhere better; when it does not, the link is
-  handed back.
-- yt-dlp and ffmpeg install themselves. Fletch fetches both shortly after it
-  first runs and refreshes them weekly, each checked against the checksum its
-  own project publishes and discarded if it does not match. Anything already
-  on PATH is left alone — it belongs to whoever put it there. Turn the whole
-  thing off in Settings → Helpers.
-
-## 1.2.6
-
-- The first-run walkthrough actually appears now. It was pushed from the main
-  process the moment the bridge came up, which on a quick machine is before
-  the window has finished starting and subscribed to it — so the one screen
-  that explains how to load the browser add-on, and now how to get yt-dlp, was
-  being thrown away silently, and most reliably on the fastest machines. The
-  window asks for it as well as waiting to be told, so the race cannot lose
-  it.
-
-## 1.2.5
-
-- Setup now offers to install yt-dlp. A page is not a file, and without that
-  helper every link to one fails — but it was offered nowhere except a card in
-  Settings that nobody had a reason to open, so the common case was a working
-  Fletch that appeared to be broken.
-- A download that fails after coming from a web page now says when yt-dlp is
-  the reason. The address an add-on scrapes off a page is borrowed: signed,
-  short-lived, usually tied to the session that was playing it. When it
-  expires the download looks broken, and the network error underneath explains
-  nothing anyone can act on. Fletch now adds what is actually wrong and where
-  to fix it, while keeping the original error.
-- The manager's heartbeat no longer holds a process open on its own. Electron
-  keeps the app alive by itself, and that one timer was the handle standing
-  between the manager and being testable outside it.
-
-## 1.2.4
-
-- Installing an update always leaves the browser holding the add-on from the
-  version before it, so the update screen now says to reload it every time,
-  rather than only when a published floor said the add-on was too old.
-- An out-of-date add-on on its own no longer blocks the window. It shows a bar
-  along the bottom instead, which stays until the add-on reports a current
-  version. Fletch can replace itself, so locking the window over an app update
-  is always escapable; it cannot reach into the browser, and anyone who loaded
-  the add-on from a folder of their own could have pressed Reload all day
-  without the version ever changing. Locking them out of the app over that
-  would have been a trap. The bar offers the extensions page and the folder
-  holding the current files, which is what actually fixes that case.
-- Whether the browser's add-on is behind is now judged against the copy this
-  build carries, not a line in the policy file. It is true by itself after
-  every release, and needs nobody to remember to publish a floor.
-
-## 1.2.3
-
-- The extension will not take over more than a dozen downloads in ten seconds.
-  Nobody clicks that fast, so a burst on that scale means something upstream
-  is wrong, and the right answer to not understanding what is happening is to
-  stop touching it: the browser keeps the rest, and Fletch stands back for a
-  minute. This is not another fix for 1.2.2's history replay, which is dealt
-  with and tested. It is the ceiling that was missing when that went wrong —
-  the one that would have turned 727 duplicated files into twelve.
-
-## 1.2.2
-
-- A withdrawn version can now be stopped. Fletch reads a small policy file
-  published beside the source, and a copy below the version it names is held
-  behind a screen it cannot be dismissed from: the reason, the replacement,
-  and a button to install it. Fletch fetches that replacement without asking,
-  because the question is not worth putting. Turning automatic updates off
-  does not waive this — that setting is about convenience, not about keeping a
-  version that was recalled. A policy file that is missing, corrupt or
-  unreachable holds nobody back.
-- A copy that cannot replace itself — a portable build, or one run from source
-  — no longer sends the user off to a web page to find the installer. It
-  downloads the installer with the download manager it already is, and opens
-  it the moment it lands. If that download fails, the screen says so and
-  offers to try again rather than sitting on "Downloading" forever.
-- The extension names its version on every call it makes to the app, so Fletch
-  can tell when the browser is still holding an old copy of it — updating the
-  app does not reload what the browser has — and says to reload it.
-- The browser extension no longer re-downloads your download history. Chrome
-  replays `downloads.onCreated` for every item already in its list when it
-  starts, and the takeover read each replayed record as a download beginning
-  now: it erased the history entry and fetched the file over again. One cold
-  boot could pull down months of history. The takeover now acts only on a
-  download that is actually running and started moments ago.
-- With Fletch closed, the extension leaves the browser's own downloads alone.
-  It used to cancel each one, fail to reach the app, and start it again in
-  Chrome.
-- What was handed back to Chrome is remembered in session storage rather than
-  in a variable the service worker loses when it is stopped, and is matched on
-  the redirected URL as well as the original, so a hand-back cannot be caught
-  and handed back without end.
-
-## 1.0.3
-
-- macOS builds now work. The hand-written `.icns` was rejected during
-  packaging; electron-builder generates each platform's icon from a single
-  1024px PNG instead, using the native tooling.
-- Failing builds write their output into the GitHub Actions run summary, so a
-  CI failure can be read rather than guessed at.
-
-## 1.0.2
-
-- Tests run inside each platform's own CI job rather than once on Linux, and
-  the release publishes whatever built. One platform failing no longer denies
-  everyone else an installer.
-
-## 1.0.1
-
-- Fixed the release build on the Linux and macOS runners: the protocol tests
-  compare Windows paths, and `path.basename` does not treat a backslash as a
-  separator off Windows, so every one of those assertions collapsed.
-
-## 1.0.0
-
-First release.
-
-### Downloads
-
-- Segmented transfer across up to 32 connections, with dynamic segment
-  stealing — a connection that finishes early takes the back half of whichever
-  peer has the most left, so one slow socket cannot hold the tail of a file.
-- Resume from an on-disk checkpoint after a pause, a crash or a reboot.
-- Adaptive concurrency: a server answering HTTP 429 is taken at its word and
-  the pool narrows rather than hammering it.
-- Stall detection, with an automatic retry at fewer connections.
-- Global speed limit, queue with a concurrency cap, category folders.
-
-### Video
-
-- yt-dlp used as an extractor only; the transfer runs on Fletch's own parallel
-  engine, which is usually considerably faster.
-- HLS with AES-128, byte-range playlists (`EXT-X-BYTERANGE`) and separate audio
-  renditions (`EXT-X-MEDIA`) — the last of which is why streams no longer come
-  out silent.
-- Separate video and audio tracks muxed with ffmpeg, stream copy only.
-- Optional browser cookies for sites that need a signed-in session.
-
-### Torrents
-
-- Magnet links and `.torrent` files over WebTorrent, with DHT and peer
-  exchange.
-- Registered as the system `magnet:` handler.
-- Piece-level progress and a live peer count.
-
-### Browser extension
-
-- Takes over downloads clicked in Chrome, Edge or Brave, and hands them back
-  untouched if Fletch is not running.
-- Pairs with the app over loopback using a locally generated token.
-- Lists media spotted on the current tab, for pages that offer no download
-  link.
-
-### Elsewhere
-
-- Working files moved out of the download folder; older `.fletch-tmp` folders
-  are swept away on launch.
-- Updates from GitHub Releases, which ask before downloading and again before
-  installing.
-- A dependency-free icon rasteriser, and ten offline test suites.
+- The grabber downloads the video you are watching.
+- A magnet link reaches Windows when Fletch is closed.
+- yt-dlp and ffmpeg install themselves.
+"

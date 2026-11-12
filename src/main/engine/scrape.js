@@ -8,7 +8,7 @@ const { fetchText } = require('./net');
 // media the player is about to load. It is a last resort, not a first one:
 // yt-dlp is better at this wherever it has an extractor.
 
-const MEDIA_EXT = /\.(m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|ts|mp3|m4a|aac|ogg|opus|flac|wav)(\?|#|$)/i;
+const MEDIA_EXT = /\.(m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|ts|mp3|m4a|aac|ogg|opus|flac|wav)([\/?#]|$)/i;
 
 /** Pull the obvious candidates out of player markup and config blobs. */
 function candidates(html, baseUrl) {
@@ -55,7 +55,12 @@ function candidates(html, baseUrl) {
       // renditions, and the HLS engine can pick among them. The bonus has to
       // be big enough to outweigh the gap between a <video src> and a URL
       // found in a player config, which is where playlists usually live.
-      score: score + (/\.m3u8(\?|#|$)/i.test(url) ? 25 : 0) + (/\.mpd(\?|#|$)/i.test(url) ? 18 : 0),
+      // A direct media file (mp4, webm, etc.) beats an embed or page URL,
+      // which is not downloadable on its own.
+      score: score
+        + (/\.m3u8([\/?#]|$)/i.test(url) ? 25 : 0)
+        + (/\.mpd([\/?#]|$)/i.test(url) ? 18 : 0)
+        - (/\/(embed|watch|player|video)\/?$/i.test(url) ? 50 : 0),
     }))
     .sort((a, b) => b.score - a.score);
 }

@@ -97,7 +97,7 @@ async function probe(url, opts = {}) {
     cookies: res.cookieJar || '',
     lastModified: h['last-modified'] || '',
     etag: h.etag || '',
-    isPlaylist: /mpegurl/i.test(mime) || /\.m3u8(\?|$)/i.test(url) || /dash\+xml/i.test(mime) || /\.mpd(\?|$)/i.test(url),
+    isPlaylist: /mpegurl/i.test(mime) || /\.m3u8([\/?#]|$)/i.test(url) || /dash\+xml/i.test(mime) || /\.mpd([\/?#]|$)/i.test(url),
   };
 }
 
