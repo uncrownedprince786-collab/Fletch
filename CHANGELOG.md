@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.10
 
 - HTTP requests that fail because a host blocks Node.js' TLS fingerprint
   (connection reset during the handshake) now fall back to Windows' native
