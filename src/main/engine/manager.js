@@ -301,6 +301,22 @@ class DownloadManager extends EventEmitter {
     this._persist();
 
     this._analyse(task, opts).catch((err) => this._fail(task, err));
+
+    if (opts.wait) {
+      // Wait for the download to finish (or fail) before returning.
+      await new Promise((resolve, reject) => {
+        const check = () => {
+          if (TERMINAL.has(task.state)) {
+            if (task.state === 'done') resolve(task);
+            else reject(new Error(task.error || 'Download failed'));
+          } else {
+            setTimeout(check, 500);
+          }
+        };
+        check();
+      });
+    }
+
     return task;
   }
 
@@ -1047,6 +1063,20 @@ class DownloadManager extends EventEmitter {
   _fail(task, err) {
     if (task.state === 'cancelled') return;
     const message = err && err.message ? err.message : String(err);
+
+    // Sites that block non-browser TLS fingerprints (connection reset during
+    // handshake) cannot be downloaded by Fletch's own HTTP stack. Say so
+    // plainly rather than leaving a cryptic network error.
+    if (/ECONNRESET|connection (reset|aborted|closed)|TLS (handshake|certificate)/i.test(message)) {
+      task.error = 'This site blocks automated downloads. The browser grabber will try to download it via your browser instead.';
+      task.speed = 0;
+      task.connections = 0;
+      task.stage = '';
+      this._touch(task);
+      this._persist();
+      this.emit('failed', task);
+      return;
+    }
 
     if (DownloadManager.RECOVERABLE.test(message) && (task.autoRetries || 0) < 2) {
       task.autoRetries = (task.autoRetries || 0) + 1;

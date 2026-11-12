@@ -159,33 +159,12 @@ class Bridge {
     if (!this._authorised(req)) return this._send(res, 401, { error: 'bad token' }, echo);
 
     if (url === '/add' && req.method === 'POST') {
-      let body = '';
-      req.on('data', (d) => {
-        body += d;
-        if (body.length > 256 * 1024) req.destroy();
-      });
-      req.on('end', async () => {
-        try {
-          const payload = JSON.parse(body || '{}');
-          const links = Array.isArray(payload.urls) ? payload.urls : [payload.url];
-          const added = [];
-          for (const link of links.filter(Boolean)) {
-            const task = await this.manager.add(link, {
-              headers: payload.headers || {},
-              forceVideo: Boolean(payload.forceVideo),
-              audioOnly: Boolean(payload.audioOnly),
-              // The browser's session for this one site, so Fletch is not
-              // turned away while the browser is signed in.
-              cookies: Array.isArray(payload.cookies) ? payload.cookies : null,
-            });
-            added.push({ id: task.id, title: task.title || link });
-          }
-          if (payload.show !== false) this.onActivate();
-          this._send(res, 200, { ok: true, added });
-        } catch (err) {
-          this._send(res, 400, { error: err.message });
-        }
-      });
+      this._handleAdd(req, res, echo, false);
+      return;
+    }
+
+    if (url === '/add-and-wait' && req.method === 'POST') {
+      this._handleAdd(req, res, echo, true);
       return;
     }
 
@@ -194,6 +173,35 @@ class Bridge {
     }
 
     this._send(res, 404, { error: 'no such endpoint' });
+  }
+
+  _handleAdd(req, res, echo, wait) {
+    let body = '';
+    req.on('data', (d) => {
+      body += d;
+      if (body.length > 256 * 1024) req.destroy();
+    });
+    req.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const links = Array.isArray(payload.urls) ? payload.urls : [payload.url];
+        const added = [];
+        for (const link of links.filter(Boolean)) {
+          const task = await this.manager.add(link, {
+            headers: payload.headers || {},
+            forceVideo: Boolean(payload.forceVideo),
+            audioOnly: Boolean(payload.audioOnly),
+            cookies: Array.isArray(payload.cookies) ? payload.cookies : null,
+            wait,
+          });
+          added.push({ id: task.id, title: task.title || link });
+        }
+        if (payload.show !== false) this.onActivate();
+        this._send(res, 200, { ok: true, added });
+      } catch (err) {
+        this._send(res, 400, { error: err.message });
+      }
+    });
   }
 
   stop() {

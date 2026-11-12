@@ -115,7 +115,7 @@ async function launchFletch(link) {
   }
 }
 
-async function send(payload, quiet = false) {
+async function send(payload, quiet = false, endpoint = '/add') {
   const cfg = await config();
   const port = cfg.port;
   const token = cfg.token || await ensurePaired();
@@ -142,7 +142,7 @@ async function send(payload, quiet = false) {
     return null;
   }
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/add`, {
+    const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -155,7 +155,7 @@ async function send(payload, quiet = false) {
       // The app regenerated its token. Pair again and retry once, rather than
       // sending the user off to copy a new one.
       const fresh = await ensurePaired(true);
-      if (fresh) return send(payload, quiet);
+      if (fresh) return send(payload, quiet, endpoint);
       if (!quiet) notify('Fletch would not accept this', 'Try restarting Fletch.');
       return null;
     }
@@ -473,8 +473,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   // content script shows its own feedback in the corner of the page.
   if (msg.type === 'grab-video' || msg.type === 'grab-magnet') {
     lastSendError = '';
-    send({ ...msg.payload, show: false }, true)
-      .then((r) => reply({ ok: Boolean(r), reason: r ? '' : lastSendError }));
+    const endpoint = msg.type === 'grab-video' ? '/add-and-wait' : '/add';
+    send({ ...msg.payload, show: false }, true, endpoint)
+      .then(async (r) => {
+        if (r) { reply({ ok: true, reason: '' }); return; }
+        // Fletch could not download (TLS fingerprinting, 403, connection
+        // reset, etc.). Fall back to the browser's own download mechanism.
+        try {
+          await chrome.downloads.download({ url: msg.payload.url });
+          reply({ ok: true, reason: '' });
+        } catch (e) {
+          reply({ ok: false, reason: lastSendError || 'Download failed' });
+        }
+      });
     return true;
   }
   if (msg.type === 'ping') {
