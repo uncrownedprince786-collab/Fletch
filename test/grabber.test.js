@@ -21,7 +21,7 @@ function load() {
     module,
     // The script asks for its settings and only starts the grabber once they
     // arrive; never calling back keeps the DOM machinery out of the way.
-    chrome: { storage: { local: { get: noop }, onChanged: { addListener: noop } }, runtime: { sendMessage: noop, onMessage: { addListener: noop } } },
+    chrome: { storage: { local: { get: noop }, onChanged: { addListener: noop } }, runtime: { sendMessage: noop, onMessage: { addListener: noop } }, downloads: { onChanged: { addListener: noop } } },
     document: { addEventListener: noop, documentElement: {}, createElement: () => ({ style: {} }) },
     addEventListener: noop,
     setInterval: noop,

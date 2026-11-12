@@ -466,7 +466,64 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   }
 });
 
-// ---------------------------------------------------------------- popup API
+// ---- browser-assisted download tracking -------------------------------------
+// When Fletch cannot download a file (TLS fingerprinting, 403, etc.), the
+// browser downloads it instead. Track progress and report to Fletch.
+
+const browserDownloads = new Map(); // downloadId -> { url, filePath, size }
+
+chrome.downloads.onChanged.addListener(async (delta) => {
+  if (!delta || delta.id == null) return;
+  const info = browserDownloads.get(delta.id);
+  if (!info) return;
+
+  if (delta.state && delta.state.current === 'complete') {
+    const items = await new Promise((r) => chrome.downloads.search({ id: delta.id }, r));
+    const item = items && items[0];
+    await reportBrowserDownload('done', {
+      browserDownloadId: delta.id,
+      url: info.url,
+      filePath: item ? item.filename : info.filePath,
+      downloaded: item ? item.fileSize : info.size,
+      size: item ? item.fileSize : info.size,
+    });
+    browserDownloads.delete(delta.id);
+  } else if (delta.state && delta.state.current === 'interrupted') {
+    await reportBrowserDownload('done', {
+      browserDownloadId: delta.id,
+      url: info.url,
+      error: (delta.error && delta.error.current) || 'Download interrupted',
+    });
+    browserDownloads.delete(delta.id);
+  } else if (delta.bytesReceived && delta.bytesReceived.current != null) {
+    const items = await new Promise((r) => chrome.downloads.search({ id: delta.id }, r));
+    const item = items && items[0];
+    await reportBrowserDownload('progress', {
+      browserDownloadId: delta.id,
+      url: info.url,
+      downloaded: delta.bytesReceived.current,
+      size: item ? item.totalBytes : info.size,
+    });
+  }
+});
+
+async function reportBrowserDownload(type, payload) {
+  try {
+    const { port, token } = await config();
+    if (!token) return;
+    let endpoint = '/browser-download-progress';
+    if (type === 'start') endpoint = '/browser-download-start';
+    else if (type === 'done') endpoint = '/browser-download-done';
+    await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...identityHeaders() },
+      body: JSON.stringify(payload),
+    });
+  } catch { /* Fletch not running */ }
+}
+
+// In the grabber button handler, when falling back to browser download:
+// register the download for progress tracking.
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.type === 'list') {
@@ -493,15 +550,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
         try {
           const cfg = await new Promise((r) => chrome.storage.local.get({ downloadDir: '' }, r));
           const opts = { url: msg.payload.url };
+          let name = msg.payload.url.split('/').pop().split('?')[0] || 'download';
+          if (!name.includes('.')) name += '.mp4';
+          name = name.replace(/[<>:"/\\|?*]/g, '_');
           if (cfg.downloadDir) {
-            // Extract filename from URL
-            let name = msg.payload.url.split('/').pop().split('?')[0] || 'download';
-            if (!name.includes('.')) name += '.mp4';
-            // Sanitize
-            name = name.replace(/[<>:"/\\|?*]/g, '_');
             opts.filename = cfg.downloadDir.replace(/\\/g, '/') + '/' + name;
           }
-          await chrome.downloads.download(opts);
+          const downloadId = await chrome.downloads.download(opts);
+          browserDownloads.set(downloadId, { url: msg.payload.url, filePath: opts.filename || name, size: null });
+          await reportBrowserDownload('start', {
+            browserDownloadId: downloadId,
+            url: msg.payload.url,
+            filename: name,
+            filePath: opts.filename || name,
+          });
           reply({ ok: true, reason: '' });
         } catch (e) {
           reply({ ok: false, reason: lastSendError || 'Download failed' });

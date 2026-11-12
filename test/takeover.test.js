@@ -46,6 +46,7 @@ function load({ port, session = {}, cancelFails = false }) {
     },
     downloads: {
       onCreated: evt('created'),
+      onChanged: { addListener: noop },
       cancel: async (id) => {
         if (cancelFails) throw new Error('download already finished');
         calls.cancelled.push(id);

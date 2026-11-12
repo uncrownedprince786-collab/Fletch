@@ -179,6 +179,58 @@ class Bridge {
       }, echo);
     }
 
+    // Browser-assisted download: the extension downloads a file that Fletch
+    // could not fetch itself (TLS fingerprinting, 403, etc.) and reports
+    // progress so Fletch can track it like any other download.
+    if (url === '/browser-download-start' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', async () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const task = this.manager.addBrowserDownload(payload);
+          this._send(res, 200, { ok: true, id: task.id });
+        } catch (err) {
+          this._send(res, 400, { error: err.message });
+        }
+      });
+      return;
+    }
+
+    if (url === '/browser-download-progress' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          this.manager.updateBrowserDownload(payload);
+          this._send(res, 200, { ok: true });
+        } catch (err) {
+          this._send(res, 400, { error: err.message });
+        }
+      });
+      return;
+    }
+
+    if (url === '/browser-download-done' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          if (payload.error) {
+            this.manager.failBrowserDownload(payload);
+          } else {
+            this.manager.completeBrowserDownload(payload);
+          }
+          this._send(res, 200, { ok: true });
+        } catch (err) {
+          this._send(res, 400, { error: err.message });
+        }
+      });
+      return;
+    }
+
     this._send(res, 404, { error: 'no such endpoint' });
   }
 

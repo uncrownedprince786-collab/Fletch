@@ -1060,6 +1060,96 @@ class DownloadManager extends EventEmitter {
   // bothering the user, since the partial file is still on disk.
   static RECOVERABLE = /stopped waiting|refusing extra connections|ECONNRESET|socket hang up|timed out|ETIMEDOUT|EPIPE|aborted/i;
 
+  // ---- browser-assisted downloads ------------------------------------------
+  // When Fletch cannot download a file (TLS fingerprinting, 403, etc.), the
+  // browser extension downloads it instead and reports progress here.
+
+  addBrowserDownload(payload) {
+    const url = String(payload.url || '').trim();
+    const filename = payload.filename || url.split('/').pop().split('?')[0] || 'download';
+    const task = {
+      id: newId(),
+      sourceUrl: url,
+      url,
+      title: filename,
+      filename,
+      filePath: payload.filePath || path.join(this.downloadDir, filename),
+      folder: this.downloadDir,
+      category: 'other',
+      kind: 'file',
+      engine: 'browser',
+      state: 'running',
+      stage: 'Downloading via browser…',
+      size: payload.size || null,
+      downloaded: 0,
+      speed: 0,
+      progress: 0,
+      eta: null,
+      connections: 0,
+      segments: [],
+      error: '',
+      thumbnail: '',
+      duration: 0,
+      uploader: '',
+      formatLabel: 'Browser download',
+      parts: [],
+      partIndex: 0,
+      headers: {},
+      forceVideo: false,
+      maxHeight: 0,
+      audioOnly: false,
+      autoStart: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      startedAt: Date.now(),
+      finishedAt: 0,
+      browserDownloadId: payload.browserDownloadId || null,
+    };
+    this.tasks.set(task.id, task);
+    this._touch(task);
+    this._persist();
+    return task;
+  }
+
+  updateBrowserDownload(payload) {
+    const task = [...this.tasks.values()].find((t) => t.browserDownloadId === payload.browserDownloadId);
+    if (!task) return;
+    if (payload.downloaded != null) task.downloaded = payload.downloaded;
+    if (payload.size != null) task.size = payload.size;
+    if (payload.speed != null) task.speed = payload.speed;
+    if (task.size) task.progress = Math.min(1, task.downloaded / task.size);
+    task.updatedAt = Date.now();
+    this._touch(task);
+  }
+
+  completeBrowserDownload(payload) {
+    const task = [...this.tasks.values()].find((t) => t.browserDownloadId === payload.browserDownloadId);
+    if (!task) return;
+    task.state = 'done';
+    task.progress = 1;
+    task.downloaded = task.size || task.downloaded;
+    task.speed = 0;
+    task.connections = 0;
+    task.stage = '';
+    task.finishedAt = Date.now();
+    this._touch(task);
+    this._persist();
+    this.emit('completed', task);
+  }
+
+  failBrowserDownload(payload) {
+    const task = [...this.tasks.values()].find((t) => t.browserDownloadId === payload.browserDownloadId);
+    if (!task) return;
+    task.state = 'error';
+    task.error = payload.error || 'Browser download failed';
+    task.speed = 0;
+    task.connections = 0;
+    task.stage = '';
+    this._touch(task);
+    this._persist();
+    this.emit('failed', task);
+  }
+
   _fail(task, err) {
     if (task.state === 'cancelled') return;
     const message = err && err.message ? err.message : String(err);
