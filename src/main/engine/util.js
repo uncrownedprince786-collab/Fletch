@@ -24,13 +24,18 @@ function formatDuration(sec) {
   return `${s}s`;
 }
 
-const ILLEGAL = /[<>:"/\\|?*\u0000-\u001F]/g;
+const ILLEGAL = /[<>:"/\\|?*\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\uFEFF]/g;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+// Strip emoji and other pictographic symbols that make filenames unwieldy and
+// can confuse older filesystems. Keep letters, numbers, punctuation and spaces.
+const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F000}-\u{1F02F}]/gu;
 
 function sanitizeFilename(name, fallback = 'download') {
   let out = String(name || '')
     .replace(/[\r\n\t]+/g, ' ')
     .replace(ILLEGAL, '_')
+    .replace(EMOJI_RE, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s.]+|[\s.]+$/g, '')
     .trim();

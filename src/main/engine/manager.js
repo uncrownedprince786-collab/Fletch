@@ -7,6 +7,7 @@ const { EventEmitter } = require('events');
 
 const { HttpDownload } = require('./http-download');
 const { HlsDownload, inspect: inspectHls } = require('./hls');
+const { DashDownload } = require('./dash');
 const { TorrentDownload, isTorrentSource, nameFromMagnet, hasTrackers, configureClient, destroyClient } = require('./torrent');
 const { probe } = require('./probe');
 const ytdlp = require('./ytdlp');
@@ -343,7 +344,11 @@ class DownloadManager extends EventEmitter {
         : !fileish;
 
       if (info && info.isPlaylist) {
-        await this._setupHls(task, info);
+        if (/\.mpd(\?|#|$)/i.test(task.url)) {
+          await this._setupDash(task, info);
+        } else {
+          await this._setupHls(task, info);
+        }
       } else if (opts.forceVideo || looksLikePage) {
         await this._setupVideo(task, opts);
       } else if (info) {
@@ -416,6 +421,16 @@ class DownloadManager extends EventEmitter {
     this._assignPath(task, `${base}.${plan.container === 'mp4' ? 'mp4' : 'ts'}`);
   }
 
+  async _setupDash(task, info) {
+    task.kind = 'video';
+    task.engine = 'dash';
+    task.url = info.url || task.url;
+    const base = sanitizeFilename((task.title || (info.filename || 'stream')).replace(/\.mpd$/i, ''));
+    task.title = task.title || base;
+    task.formatLabel = 'DASH stream';
+    this._assignPath(task, `${base}.mp4`);
+  }
+
   /**
    * A link that plainly names a file, from a server that would not describe
    * it. The downloader finds out the size and whether ranges work when it
@@ -443,9 +458,15 @@ class DownloadManager extends EventEmitter {
     task.foundOnPage = found.alternatives;
     const pageTitle = found.title ? sanitizeFilename(found.title) : '';
 
-    if (/\.m3u8(\?|#|$)/i.test(found.url) || /\.mpd(\?|#|$)/i.test(found.url)) {
+    if (/\.m3u8(\?|#|$)/i.test(found.url)) {
       task.title = pageTitle || task.title;
       await this._setupHls(task, { url: found.url, filename: pageTitle || 'stream' });
+      task.formatLabel = `${task.formatLabel} · found on the page`;
+      return;
+    }
+    if (/\.mpd(\?|#|$)/i.test(found.url)) {
+      task.title = pageTitle || task.title;
+      await this._setupDash(task, { url: found.url, filename: pageTitle || 'stream' });
       task.formatLabel = `${task.formatLabel} · found on the page`;
       return;
     }
@@ -670,6 +691,7 @@ class DownloadManager extends EventEmitter {
       case 'torrent': return this._runTorrent(task);
       case 'merge': return this._runMerge(task);
       case 'hls': return this._runHls(task, task.url, task.filePath, true);
+      case 'dash': return this._runDash(task);
       case 'ytdlp': return this._runYtDlp(task);
       default: return this._runHttp(task, task.url, task.filePath, task.headers);
     }
@@ -752,6 +774,19 @@ class DownloadManager extends EventEmitter {
         task.stage = '';
       }
     }
+    return res;
+  }
+
+  async _runDash(task) {
+    const dl = new DashDownload({
+      url: task.url,
+      filePath: task.filePath,
+      headers: task.headers,
+      connections: Math.min(16, (task.connectionsOverride || this.connections) * 2),
+    });
+    this._wire(task, dl);
+    const res = await dl.start();
+    if (res && (res.cancelled || res.paused)) return res;
     return res;
   }
 

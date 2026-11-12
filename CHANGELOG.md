@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- The grabber button now appears within half a second of a video starting to
+  play, instead of up to 1.2 seconds later. It listens for play, loadeddata
+  and canplay events on every video (including ones inside shadow roots), and
+  the background sniffer notifies the page the moment a media response is seen,
+  so the button can appear before the video element is even fully rendered.
+- A native DASH (MPD) downloader joins the HLS one. DASH streams used to be
+  handed to yt-dlp; common SegmentTemplate and SegmentList manifests are now
+  fetched directly, with init segments and numbered media segments written in
+  order, and progress reported per segment.
+- Filenames are cleaned more aggressively: control characters, zero-width
+  marks and emoji are stripped, Windows reserved names are prefixed, and the
+  180-character cap keeps the extension intact.
+- The grabber button is on by default and needs no configuration; the sniffer
+  captures m3u8, mpd, mp4 and other media responses automatically.
+
+## 1.2.8
+
 ## 1.2.8
 
 - Torrents are private by default. DHT, peer exchange and local discovery all

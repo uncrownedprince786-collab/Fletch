@@ -436,6 +436,11 @@ chrome.webRequest.onHeadersReceived.addListener(
       // Ad and tracking pixels masquerade as media often enough to be worth skipping.
       if (/\/(ads?|beacon|pixel|analytics)\//i.test(details.url)) return;
       remember(details.tabId, details.url, type);
+      // Tell the content script that media is flowing so it can show the
+      // grabber button immediately, without waiting for the next poll.
+      if (details.tabId >= 0) {
+        chrome.tabs.sendMessage(details.tabId, { type: 'media-detected', url: details.url }).catch(() => {});
+      }
     }
   },
   { urls: ['<all_urls>'] },

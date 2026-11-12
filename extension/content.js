@@ -15,7 +15,7 @@ const MIN_WIDTH = 240;
 const MIN_HEIGHT = 135;
 const EDGE = 8;
 
-let settings = { showGrabber: true, takeover: true };
+let settings = { showGrabber: true, takeover: true, fastDetect: true };
 let host = null;
 let root = null;
 let bar = null;
@@ -23,8 +23,10 @@ let label = null;
 let tracked = null;        // the <video> the button currently belongs to
 let dismissed = new WeakSet();
 let frame = 0;
+let lastVideoCount = 0;
+let playListenerAttached = new WeakSet();
 
-chrome.storage.local.get({ showGrabber: true, takeover: true }, (s) => {
+chrome.storage.local.get({ showGrabber: true, takeover: true, fastDetect: true }, (s) => {
   settings = s;
   if (settings.showGrabber) start();
 });
@@ -33,8 +35,20 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.showGrabber) {
     settings.showGrabber = changes.showGrabber.newValue;
     if (!settings.showGrabber) hide();
+    else schedule();
   }
   if (changes.takeover) settings.takeover = changes.takeover.newValue;
+  if (changes.fastDetect) settings.fastDetect = changes.fastDetect.newValue;
+});
+
+// Listen for media URLs detected by the background script's network sniffer.
+// This lets us show the grabber even before the <video> element is fully
+// rendered, because we already know a media stream is flowing.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === 'media-detected' && settings.showGrabber) {
+    // Give the page a moment to render the video element, then check.
+    setTimeout(schedule, 200);
+  }
 });
 
 // ---------------------------------------------------------------- the button
@@ -143,12 +157,19 @@ function toast(text) {
 
 // ---------------------------------------------------------------- finding video
 
-/** The biggest video on screen that is actually worth offering to download. */
 function bestVideo() {
   let best = null;
   let bestArea = 0;
   for (const v of document.querySelectorAll('video')) {
     if (dismissed.has(v)) continue;
+    // Attach a play listener the first time we see this video so the button
+    // appears the instant playback starts, not on the next poll.
+    if (!playListenerAttached.has(v)) {
+      playListenerAttached.add(v);
+      v.addEventListener('play', () => { if (settings.showGrabber) schedule(); }, { passive: true });
+      v.addEventListener('loadeddata', () => { if (settings.showGrabber) schedule(); }, { passive: true });
+      v.addEventListener('canplay', () => { if (settings.showGrabber) schedule(); }, { passive: true });
+    }
     const r = v.getBoundingClientRect();
     if (r.width < MIN_WIDTH || r.height < MIN_HEIGHT) continue;
     // Must be at least partly on screen.
@@ -159,6 +180,27 @@ function bestVideo() {
     const area = r.width * r.height;
     if (area > bestArea) { bestArea = area; best = v; }
   }
+  // Also check for videos inside shadow DOMs and iframes we can reach.
+  try {
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        for (const v of el.shadowRoot.querySelectorAll('video')) {
+          if (dismissed.has(v)) continue;
+          if (!playListenerAttached.has(v)) {
+            playListenerAttached.add(v);
+            v.addEventListener('play', () => { if (settings.showGrabber) schedule(); }, { passive: true });
+            v.addEventListener('loadeddata', () => { if (settings.showGrabber) schedule(); }, { passive: true });
+          }
+          const r = v.getBoundingClientRect();
+          if (r.width < MIN_WIDTH || r.height < MIN_HEIGHT) continue;
+          if (r.bottom < 0 || r.top > window.innerHeight) continue;
+          if (r.right < 0 || r.left > window.innerWidth) continue;
+          const area = r.width * r.height;
+          if (area > bestArea) { bestArea = area; best = v; }
+        }
+      }
+    }
+  } catch { /* shadow DOM access can throw on cross-origin */ }
   return best;
 }
 
@@ -353,8 +395,9 @@ function start() {
   addEventListener('scroll', schedule, { passive: true, capture: true });
   addEventListener('resize', schedule, { passive: true });
   addEventListener('fullscreenchange', schedule);
-  // Single-page apps swap video without touching the DOM we are watching.
-  setInterval(schedule, 1200);
+  // Poll faster so the button appears within half a second of a video loading,
+  // not up to 1.2s later.
+  setInterval(schedule, 500);
   schedule();
 }
 
