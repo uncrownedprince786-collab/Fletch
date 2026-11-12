@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.9
 
 - The grabber button now appears within half a second of a video starting to
   play, instead of up to 1.2 seconds later. It listens for play, loadeddata
