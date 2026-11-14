@@ -759,10 +759,12 @@ class DownloadManager extends EventEmitter {
       return await dl.start();
     } catch (err) {
       const msg = String(err && err.message || err);
-      // Only fall back to PowerShell for TLS fingerprinting / connection reset.
-      // Stalls, timeouts, and HTTP errors are handled by the HTTP downloader
-      // itself or should propagate to the caller.
-      if (/ECONNRESET|connection (reset|aborted|closed)|TLS (handshake|certificate)/i.test(msg)) {
+      // Fall back to PowerShell for remote hosts that block Node.js (TLS
+      // fingerprinting, connection reset, stalls). Skip localhost so the
+      // HTTP downloader's own retry logic (recovery tests) is not bypassed.
+      let isLocal = false;
+      try { isLocal = /localhost|127\.0\.0\.1|::1/.test(new URL(url).hostname); } catch { /* */ }
+      if (!isLocal) {
         psFallback = true;
       } else {
         throw err;
@@ -774,63 +776,52 @@ class DownloadManager extends EventEmitter {
   }
 
   async _runHttpPowerShell(task, url, filePath, headers, size) {
-    task.stage = 'Downloading via system network stack…';
+    task.stage = 'Trying system network stack…';
     this._touch(task);
     const partPath = filePath + '.fletchpart';
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
     const ua = headers['User-Agent'] || UA_DESKTOP;
-    const maxRetries = 5;
-    let lastError = null;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      if (attempt > 0) {
-        task.stage = `Retrying download (attempt ${attempt + 1} of ${maxRetries})…`;
-        this._touch(task);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-      if (attempt > 0) await fsp.rm(partPath, { force: true }).catch(() => {});
-      const timeout = 600000;
-      const escapedUrl = url.replace(/'/g, "''");
-      const escapedFile = partPath.replace(/'/g, "''");
-      const escapedUA = ua.replace(/'/g, "''");
-      const script = [
-        `$ProgressPreference = 'SilentlyContinue'`,
-        `try {`,
-        `  Invoke-WebRequest -Uri '${escapedUrl}' -OutFile '${escapedFile}' -UseBasicParsing -TimeoutSec ${Math.round(timeout / 1000)} -UserAgent '${escapedUA}' -ErrorAction Stop`,
-        `  Write-Output 'OK'`,
-        `} catch {`,
-        `  Write-Output "ERR: $($_.Exception.Message)"`,
-        `}`,
-      ].join('; ');
-      const { execFileSync } = require('child_process');
-      let result;
-      try {
-        result = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
-          timeout: timeout + 10000,
-          encoding: 'utf8',
-          windowsHide: true,
-        });
-      } catch (err) {
-        lastError = new Error(`Download failed: ${err.message}`);
-        continue;
-      }
-      const output = String(result || '').trim();
-      if (output.startsWith('OK')) {
-        await fsp.rename(partPath, filePath).catch(async () => {
-          await fsp.copyFile(partPath, filePath);
-          await fsp.rm(partPath, { force: true });
-        });
-        const stat = await fsp.stat(filePath);
-        task.size = stat.size;
-        task.downloaded = stat.size;
-        task.progress = 1;
-        task.stage = '';
-        this._touch(task);
-        return { filePath, size: stat.size };
-      }
-      lastError = new Error(output || 'Download failed');
+    const timeout = 120000; // 2 minutes per attempt
+    const escapedUrl = url.replace(/'/g, "''");
+    const escapedFile = partPath.replace(/'/g, "''");
+    const escapedUA = ua.replace(/'/g, "''");
+    const script = [
+      `$ProgressPreference = 'SilentlyContinue'`,
+      `try {`,
+      `  Invoke-WebRequest -Uri '${escapedUrl}' -OutFile '${escapedFile}' -UseBasicParsing -TimeoutSec ${Math.round(timeout / 1000)} -UserAgent '${escapedUA}' -ErrorAction Stop`,
+      `  Write-Output 'OK'`,
+      `} catch {`,
+      `  Write-Output "ERR: $($_.Exception.Message)"`,
+      `}`,
+    ].join('; ');
+    const { execFileSync } = require('child_process');
+    let result;
+    try {
+      result = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
+        timeout: timeout + 10000,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+    } catch (err) {
+      await fsp.rm(partPath, { force: true }).catch(() => {});
+      throw new Error(`Download failed: ${err.message}`);
     }
-    await fsp.rm(partPath, { force: true }).catch(() => {});
-    throw lastError || new Error('Download failed after multiple retries');
+    const output = String(result || '').trim();
+    if (!output.startsWith('OK')) {
+      await fsp.rm(partPath, { force: true }).catch(() => {});
+      throw new Error(output || 'Download failed');
+    }
+    await fsp.rename(partPath, filePath).catch(async () => {
+      await fsp.copyFile(partPath, filePath);
+      await fsp.rm(partPath, { force: true });
+    });
+    const stat = await fsp.stat(filePath);
+    task.size = stat.size;
+    task.downloaded = stat.size;
+    task.progress = 1;
+    task.stage = '';
+    this._touch(task);
+    return { filePath, size: stat.size };
   }
 
   async _runHls(task, url, filePath, remux, opts = {}) {
