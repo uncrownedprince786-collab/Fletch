@@ -138,19 +138,10 @@ async function send(payload, quiet = false, endpoint = '/add') {
     if (cookies.length) payload = { ...payload, cookies };
   }
   if (!token) {
-    // Not paired means the app is not there to pair with. Hand the link to
-    // Windows so Fletch starts and takes it, rather than dropping the click.
-    if (await launchFletch(payload && payload.url)) {
-      lastSendError = '';
-      if (!quiet) notify('Opening Fletch', 'Fletch is starting and will take this download.');
-      return { launched: true, added: [] };
-    }
-    lastSendError = 'not paired with Fletch';
-    if (!quiet) {
-      notify('Fletch is not running',
-        'Start Fletch once; after that this button starts it for you.');
-    }
-    return null;
+    // Not paired means the app is not there to pair with. Return a special
+    // result so the caller can trigger the fletch:// protocol via a hidden
+    // iframe instead of creating a visible browser tab.
+    return { needProtocol: true, url: payload && payload.url };
   }
   try {
     const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
@@ -184,15 +175,8 @@ async function send(payload, quiet = false, endpoint = '/add') {
     return data;
   } catch (err) {
     // The app was closed between the pairing check and the request, or the
-    // port moved. Either way, ask Windows to start it with this link.
-    if (await launchFletch(payload && payload.url)) {
-      lastSendError = '';
-      if (!quiet) notify('Opening Fletch', 'Fletch is starting and will take this download.');
-      return { launched: true, added: [] };
-    }
-    lastSendError = 'Fletch is not running';
-    if (!quiet) notify('Could not reach Fletch', 'Start Fletch once and it will pair by itself.');
-    return null;
+    // port moved. Return needProtocol so the caller can trigger the protocol.
+    return { needProtocol: true, url: payload && payload.url };
   }
 }
 
@@ -544,6 +528,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     const endpoint = msg.type === 'grab-video' ? '/add-and-wait' : '/add';
     send({ ...msg.payload, show: false }, true, endpoint)
       .then(async (r) => {
+        if (r && r.needProtocol) {
+          // Fletch is not running. Trigger the fletch:// protocol via a
+          // hidden iframe so no visible tab or popup appears. Windows will
+          // launch Fletch with the link attached.
+          chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]) {
+              chrome.tabs.sendMessage(tabs[0].id, { type: 'trigger-protocol', url: msg.payload.url });
+            }
+          });
+          reply({ ok: true, reason: '' });
+          return;
+        }
         if (r) { reply({ ok: true, reason: '' }); return; }
         // Fletch could not download (TLS fingerprinting, 403, connection
         // reset, etc.). Fall back to the browser's own download mechanism.

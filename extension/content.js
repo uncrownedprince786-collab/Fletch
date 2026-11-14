@@ -41,12 +41,18 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.fastDetect) settings.fastDetect = changes.fastDetect.newValue;
 });
 
-// Listen for media URLs detected by the background script's network sniffer.
-// This lets us show the grabber even before the <video> element is fully
-// rendered, because we already know a media stream is flowing.
+// Listen for messages from the background script.
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === 'trigger-protocol' && msg.url) {
+    // Trigger the fletch:// protocol via a hidden iframe so no visible
+    // tab or popup appears. Windows will launch Fletch with the link.
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'display:none;width:0;height:0;border:0;';
+    iframe.src = `fletch://grab?u=${encodeURIComponent(msg.url)}`;
+    document.body.appendChild(iframe);
+    setTimeout(() => { try { iframe.remove(); } catch {} }, 1000);
+  }
   if (msg && msg.type === 'media-detected' && settings.showGrabber) {
-    // Give the page a moment to render the video element, then check.
     setTimeout(schedule, 200);
   }
 });
