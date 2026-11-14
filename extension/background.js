@@ -550,7 +550,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
           if (!name.includes('.')) name += '.mp4';
           name = name.replace(/[<>:"/\\|?*]/g, '_');
           if (cfg.downloadDir) {
-            opts.filename = cfg.downloadDir.replace(/\\/g, '/') + '/' + name;
+            const browserDlDir = cfg.downloadDir.replace(/\\/g, '/');
+            const dlMatch = browserDlDir.match(/Downloads\/(.+)$/i);
+            if (dlMatch) {
+              opts.filename = dlMatch[1] + '/' + name;
+            } else {
+              opts.filename = 'Fletch/' + name;
+            }
           }
           const downloadId = await chrome.downloads.download(opts);
           browserDownloads.set(downloadId, { url: msg.payload.url, filePath: opts.filename || name, size: null });
