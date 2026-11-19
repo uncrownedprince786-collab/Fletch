@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.3.2
+
+Two security fixes. Download speed is unchanged.
+
+- **Downloads now carry Windows' "came from the internet" mark** (the
+  Zone.Identifier stream a browser writes). Windows SmartScreen checks a
+  downloaded program before it first runs, and Office opens downloaded
+  documents in Protected View, exactly as for a file Chrome fetched. Before,
+  anything Fletch downloaded — including downloads it took over from the
+  browser — skipped both. The mark names where the file came from, without the
+  link's signed query string or any password. Torrent folders are marked file
+  by file. Drives that cannot hold the mark (FAT32, exFAT) are skipped quietly.
+- **A site's cookies and login no longer follow a redirect to another site.**
+  Cookies are kept per site: the ones Fletch was given for a link, and the ones
+  each redirect sets, go only to that same site, as in a browser. An
+  `Authorization` header is dropped when a redirect leaves its origin. Redirects
+  within a site work exactly as before. Telling sites apart now understands
+  addresses like `example.co.uk` and `example.com.pk`.
+- New tests: `motw.test.js`, `redirect-cookies.test.js`.
+
 ## 1.3.1
 
 - Settings and the download list are saved for the last time when Fletch

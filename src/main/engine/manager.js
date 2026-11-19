@@ -19,6 +19,7 @@ const {
 const { filenameFromUrl } = require('./probe');
 const { scrapePage } = require('./scrape');
 const cookieJar = require('./cookies');
+const { markDownload } = require('./motw');
 
 const TERMINAL = new Set(['done', 'error', 'cancelled']);
 
@@ -1009,6 +1010,12 @@ class DownloadManager extends EventEmitter {
     task.autoRetries = 0;
     task.finishedAt = Date.now();
     if (task.size) task.downloaded = task.size;
+    // Mark it as from the internet, as a browser would, before anyone — the
+    // user, or Fletch opening an installer it fetched — can open it.
+    markDownload(task.filePath, {
+      hostUrl: task.url || task.sourceUrl,
+      referrerUrl: task.pageUrl || (task.headers && (task.headers.Referer || task.headers.referer)),
+    }).catch(() => {});
     this._touch(task);
     this._persist();
     this.emit('completed', task);

@@ -46,6 +46,19 @@ const server = http.createServer((req, res) => {
   if (m) h['Content-Range'] = `bytes ${start}-${end}/${SIZE}`;
   res.writeHead(m ? 206 : 200, h);
   let pos = start;
+  // A per-connection cap, like many real hosts, so that every worker is
+  // still busy when the last one starts and the count of them means something.
+  if (route === '/paced.bin') {
+    const tick = () => {
+      if (res.destroyed) return;
+      if (pos > end) return res.end();
+      const n = Math.min(64 * 1024, end + 1 - pos);
+      res.write(BODY.subarray(pos, pos + n));
+      pos += n;
+      setTimeout(tick, 10);
+    };
+    return tick();
+  }
   const pump = () => {
     while (pos <= end && !res.destroyed) {
       const n = Math.min(256 * 1024, end + 1 - pos);
@@ -120,9 +133,12 @@ app.whenReady().then(() => new Promise((resolve) => server.listen(0, '127.0.0.1'
     net.useChromiumFor(`${base}/`);
     check(net.transportFor(`${base}/x`) === 'chromium', 'a host can be moved to Chromium for every later request');
     const viaChromium = await timedDownload(`${base}/chromium.bin`, dir, 'chromium.bin');
-    check(viaChromium.intact, `a segmented download through Chromium is byte-perfect (${viaChromium.peak} connections at once)`);
-    check(viaChromium.peak >= 8, 'and kept all its parallel workers');
+    check(viaChromium.intact, 'a segmented download through Chromium is byte-perfect');
     check(/Chrome/.test(viaChromium.note), `the progress note says which stack it used ("${viaChromium.note}")`);
+    // Past Chrome's own limit of six connections per host, which the
+    // download spreads across several network sessions to get around.
+    const paced = await timedDownload(`${base}/paced.bin`, dir, 'paced.bin');
+    check(paced.intact && paced.peak >= 8, `and keeps all 8 parallel workers, beyond Chrome's 6-per-host limit (${paced.peak} at once)`);
     console.log(`      speed on loopback: Node ${viaNode.mbps.toFixed(0)} MB/s, Chromium ${viaChromium.mbps.toFixed(0)} MB/s`);
     check(viaNode.intact, 'the same download through Node is byte-perfect too');
   } catch (err) {

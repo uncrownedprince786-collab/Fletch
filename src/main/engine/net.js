@@ -59,10 +59,101 @@ function hostOf(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch { return ''; }
 }
 
+// Second-level labels that are a registry's own, not somebody's site, under a
+// two-letter country code: example.co.uk is a site, co.uk is not.
+const GENERIC_SLDS = new Set([
+  'co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'gob', 'nic', 'mil',
+  'ltd', 'plc', 'sch', 'nom', 'or', 'ne', 'go',
+]);
+
+/**
+ * The site a host belongs to, near enough to what a browser calls one:
+ * www.example.com and dl.example.com are one site, a.co.uk and b.co.uk are two.
+ * An IP address or a single-label host such as localhost is a site of its own.
+ *
+ * A heuristic rather than the full public-suffix list, and it errs towards
+ * treating hosts as different sites — which only ever means a cookie is not
+ * sent, never that it is sent somewhere it should not go.
+ */
+function siteOf(host) {
+  let h = String(host || '').trim().toLowerCase().replace(/\.$/, '');
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  if (!h) return '';
+  if (h.includes(':')) return h;                          // IPv6
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return h;         // IPv4
+  const labels = h.split('.');
+  if (labels.length < 2) return h;                        // localhost and the like
+  const tld = labels[labels.length - 1];
+  const sld = labels[labels.length - 2];
+  if (labels.length >= 3 && tld.length === 2 && GENERIC_SLDS.has(sld)) {
+    return labels.slice(-3).join('.');
+  }
+  return labels.slice(-2).join('.');
+}
+
+function siteOfUrl(url) {
+  return siteOf(hostOf(url));
+}
+
+/**
+ * Cookies filed by the site they belong to. A redirect can hand a download
+ * from one site to another, and a browser never sends the first site's
+ * cookies — a signed-in session, often — to the second. Neither does this:
+ * each site only ever gets back what it, or the caller for it, put in.
+ */
+class SiteJar {
+  constructor() { this.sites = new Map(); }
+
+  _for(site) {
+    if (!this.sites.has(site)) this.sites.set(site, new Map());
+    return this.sites.get(site);
+  }
+
+  /** A `name=value; …` header that belongs to this site. */
+  addHeader(site, header) {
+    if (!site || !header) return;
+    const map = this._for(site);
+    for (const part of String(header).split(';')) {
+      const piece = part.trim();
+      const eq = piece.indexOf('=');
+      if (eq > 0) map.set(piece.slice(0, eq).trim(), piece.slice(eq + 1).trim());
+    }
+  }
+
+  /**
+   * Set-Cookie lines from a response by `host`. They are filed under the
+   * host's own site whatever their Domain says: a Domain that matches the
+   * host stays inside its site anyway, and one that does not — or that
+   * names a whole registry like co.uk — is not allowed to widen the reach.
+   */
+  addSetCookie(host, setCookie) {
+    if (!setCookie) return;
+    const site = siteOf(host);
+    if (!site) return;
+    const map = this._for(site);
+    for (const line of Array.isArray(setCookie) ? setCookie : [setCookie]) {
+      const [pair] = String(line).split(';');
+      const eq = pair.indexOf('=');
+      if (eq > 0) map.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+    }
+  }
+
+  /** The Cookie header for a request to this host: its own site's, nothing else. */
+  headerFor(host) {
+    const map = this.sites.get(siteOf(host));
+    return map ? [...map].map(([k, v]) => `${k}=${v}`).join('; ') : '';
+  }
+}
+
 /**
  * Issue a request, following redirects by hand so we keep the final URL and any
  * cookies the hops handed us. Resolves with the live response — the caller owns
  * draining or destroying it.
+ *
+ * The caller's Cookie header belongs to the site of the URL it asked for, and
+ * a hop's Set-Cookie to that hop's site; each hop is sent only its own site's
+ * cookies. `res.cookieJar` is what the final URL's site holds, which is what
+ * a caller may safely send on to that URL again.
  */
 function requestNode(url, opts = {}) {
   const {
@@ -76,7 +167,10 @@ function requestNode(url, opts = {}) {
 
   return new Promise((resolve, reject) => {
     let hops = 0;
-    let jar = headers.Cookie || headers.cookie || '';
+    const jar = new SiteJar();
+    jar.addHeader(siteOfUrl(url), headers.Cookie || headers.cookie || '');
+    let startOrigin = '';
+    try { startOrigin = new URL(url).origin; } catch { /* reported below */ }
 
     const go = (currentUrl) => {
       let u;
@@ -86,7 +180,14 @@ function requestNode(url, opts = {}) {
       const lib = u.protocol === 'https:' ? https : http;
       const agentSet = insecure ? insecureAgents : agents;
       const h = defaultHeaders(currentUrl, headers);
-      if (jar) h.Cookie = jar;
+      // defaultHeaders copies the caller's Cookie onto every hop; the jar
+      // decides instead, so another site never sees it.
+      delete h.Cookie;
+      // Credentials given for one origin are not repeated to another that a
+      // redirect points at — the rule browsers follow.
+      if (u.origin !== startOrigin) delete h.Authorization;
+      const cookie = jar.headerFor(u.hostname);
+      if (cookie) h.Cookie = cookie;
 
       const req = lib.request(
         {
@@ -100,7 +201,7 @@ function requestNode(url, opts = {}) {
         },
         (res) => {
           const code = res.statusCode || 0;
-          jar = pickCookies(res.headers['set-cookie'], jar);
+          jar.addSetCookie(u.hostname, res.headers['set-cookie']);
 
           if (code >= 300 && code < 400 && res.headers.location) {
             res.resume();
@@ -112,7 +213,7 @@ function requestNode(url, opts = {}) {
           }
 
           res.finalUrl = currentUrl;
-          res.cookieJar = jar;
+          res.cookieJar = jar.headerFor(u.hostname);
           res.request = req;
           res.transport = 'node';
           resolve(res);
@@ -199,11 +300,6 @@ function cookiePairs(header) {
   return out;
 }
 
-/** The last two labels of a host: good enough to tell one site from another. */
-function siteOf(host) {
-  return String(host || '').split('.').slice(-2).join('.');
-}
-
 /**
  * Put the caller's cookies in the lane's jar for this URL.
  *
@@ -267,7 +363,11 @@ function requestChromium(url, opts = {}) {
   const ses = laneSession(e, lane);
   const given = headers.Cookie || headers.cookie || '';
   let site = '';
-  try { site = siteOf(new URL(url).hostname); } catch { /* reported below */ }
+  let startOrigin = '';
+  try {
+    site = siteOf(new URL(url).hostname);
+    startOrigin = new URL(url).origin;
+  } catch { /* reported below */ }
 
   return new Promise((resolve, reject) => {
     let hops = 0;
@@ -286,6 +386,7 @@ function requestChromium(url, opts = {}) {
       const h = defaultHeaders(currentUrl, headers);
       delete h.Connection; // Chromium manages its own connections
       delete h.Cookie;     // the jar supplies these; see seedCookies
+      if (u.origin !== startOrigin) delete h.Authorization; // as requestNode
 
       let req;
       try {
@@ -372,8 +473,12 @@ function requestChromium(url, opts = {}) {
 
         // Everything the site has set along the way, for callers that carry
         // the session on to other requests (the probe hands it to the workers).
+        // Chromium's jar is already scoped to this URL; the caller's own
+        // cookies only join it if the redirects ended on the site they
+        // were given for.
         jarHeader(ses, currentUrl).then((fromJar) => {
-          out.cookieJar = pickCookies(resHeaders['set-cookie'], mergeCookieHeader(given, fromJar));
+          const ownSite = siteOf(u.hostname) === site;
+          out.cookieJar = pickCookies(resHeaders['set-cookie'], mergeCookieHeader(ownSite ? given : '', fromJar));
           if (out.destroyed && !ended) return fail(out.errored || new Error('Connection closed'));
           if (settled) { out.destroy(); return; }
           settled = true;
@@ -559,5 +664,5 @@ function _setChromiumTransport(fn) {
 module.exports = {
   request, fetchText, fetchBuffer, defaultHeaders,
   requestNode, requestChromium, transportFor, useChromiumFor, isConnectionError, looksLikeBotWall,
-  _setChromiumTransport,
+  siteOf, _setChromiumTransport,
 };
