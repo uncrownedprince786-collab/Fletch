@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.3
+
+- **Torrents find far more peers.** Every torrent is now announced to 14
+  public trackers on top of its own, up from 5, one of which had been dead for
+  years. Each was checked to answer before going in, and one works over HTTP
+  for networks that block UDP. On the Debian installer's swarm that meant about
+  70 peers instead of about 40, with DHT and peer exchange still off. A
+  well-seeded torrent was already as fast as the line allowed, so the gain shows
+  on torrents with few seeders, where more peers is more speed.
+- Two other changes were measured and left out. uTP connections came out slower
+  than TCP (2.9 against 3.7 MB/s from the same swarm), so torrents stay on TCP,
+  now set explicitly so a run from source matches the installed app.
+  Rarest-first piece order was no faster than the default.
+
 ## 1.3.2
 
 Two security fixes. Download speed is unchanged.
