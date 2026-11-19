@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.1
+
+- Settings and the download list are saved for the last time when Fletch
+  quits, and nothing is written after that. A save queued just before quitting
+  used to land up to ~300ms later, which could overwrite the newer copy with an
+  older one. In the test suite it wrote into a folder being deleted, which is
+  what failed the Windows build of 1.3.0 (the 1.3.0 installers themselves were
+  fine).
+- New test: `store.test.js`.
+
 ## 1.3.0
 
 Faster downloads, and more sites that work.

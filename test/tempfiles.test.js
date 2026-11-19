@@ -97,7 +97,9 @@ server.listen(0, '127.0.0.1', async () => {
     mgr.shutdown();
     server.close();
     await wait(200);
-    fs.rmSync(home, { recursive: true, force: true });
+    // Retries: on Windows a virus scanner can hold a just-written file open
+    // for a moment, which is not something this test is about.
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     process.exitCode = failed ? 1 : 0;
   }
 });

@@ -15,6 +15,10 @@ class JsonStore {
     this.data = { ...defaults };
     this._queued = null;
     this._writing = false;
+    this._timer = null;
+    // Bumped by saveNow(). An async save that started under an older
+    // generation has been overtaken and must not land.
+    this._generation = 0;
   }
 
   load() {
@@ -46,26 +50,48 @@ class JsonStore {
   save() {
     if (this._writing) { this._queued = true; return; }
     this._writing = true;
-    setTimeout(async () => {
+    const generation = this._generation;
+    this._timer = setTimeout(async () => {
+      this._timer = null;
       const snapshot = JSON.stringify(this.data, null, 2);
       const tmp = `${this.filePath}.tmp`;
       try {
+        if (generation !== this._generation) return;
         await fsp.mkdir(path.dirname(this.filePath), { recursive: true });
         await fsp.writeFile(tmp, snapshot);
-        await fsp.rename(tmp, this.filePath);
+        // saveNow() ran while this was writing: its copy is newer, so this
+        // one is thrown away rather than renamed over it.
+        if (generation !== this._generation) await fsp.rm(tmp, { force: true });
+        else await fsp.rename(tmp, this.filePath);
       } catch {
         /* a dropped save costs at most the last few seconds of state */
       } finally {
         this._writing = false;
+        // saveNow() clears the queue, so anything queued now is a change
+        // made after it, and is owed a save of its own.
         if (this._queued) { this._queued = false; this.save(); }
       }
     }, 150);
   }
 
+  /**
+   * Write now, synchronously, and make it the last word: any save still
+   * waiting is cancelled, and one already writing is discarded. Without that,
+   * a save queued just before shutdown would land after it — overwriting the
+   * newer copy with an older one, or writing into a folder already let go of.
+   */
   saveNow() {
+    this._generation++;
+    this._queued = false;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+      this._writing = false;
+    }
     try {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-      const tmp = `${this.filePath}.tmp`;
+      // Its own temp name, so it cannot collide with an async save mid-write.
+      const tmp = `${this.filePath}.final.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));
       fs.renameSync(tmp, this.filePath);
     } catch { /* nothing useful to do on shutdown */ }
