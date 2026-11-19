@@ -10,7 +10,49 @@ const { EventEmitter } = require('events');
 
 const NO_CODEC = (v) => !v || v === 'none';
 
+// Attribute names in the cookie string yt-dlp attaches to a format; anything
+// else is a cookie's own name.
+const COOKIE_ATTRS = /^(domain|path|secure|expires|max-age|version|httponly|samesite|comment|port|discard)$/i;
+
+/**
+ * yt-dlp keeps the cookies a format needs out of its headers, as
+ * `name=value; Domain=…; Path=/; Secure; name2=value2; …`. A site that set a
+ * session cookie while yt-dlp read the page will refuse the media without it,
+ * so it is turned back into a plain Cookie header here.
+ */
+function cookieHeaderFrom(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  const pairs = [];
+  for (const part of raw.split(';')) {
+    const piece = part.trim();
+    const eq = piece.indexOf('=');
+    if (eq <= 0) continue;
+    const name = piece.slice(0, eq).trim();
+    if (COOKIE_ATTRS.test(name)) continue;
+    pairs.push(`${name}=${piece.slice(eq + 1).trim()}`);
+  }
+  return pairs.join('; ');
+}
+
+/** Combine Cookie headers, a later value winning over an earlier one of the same name. */
+function mergeCookieHeaders(...headers) {
+  const map = new Map();
+  for (const header of headers) {
+    for (const part of String(header || '').split(';')) {
+      const piece = part.trim();
+      const eq = piece.indexOf('=');
+      if (eq > 0) map.set(piece.slice(0, eq).trim(), piece.slice(eq + 1).trim());
+    }
+  }
+  return [...map].map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
 function normaliseFormat(f) {
+  const chunk = Number(f.downloader_options && f.downloader_options.http_chunk_size);
+  // Never let a format's own Cookie header through: yt-dlp strips them for
+  // safety, and whatever is left over is not scoped to this URL.
+  const headers = { ...(f.http_headers || {}) };
+  for (const k of Object.keys(headers)) if (/^cookie$/i.test(k)) delete headers[k];
   return {
     id: f.format_id,
     url: f.url,
@@ -26,7 +68,12 @@ function normaliseFormat(f) {
     size: f.filesize || f.filesize_approx || null,
     note: f.format_note || '',
     language: f.language || '',
-    headers: f.http_headers || {},
+    headers,
+    cookies: cookieHeaderFrom(f.cookies),
+    // The request size yt-dlp itself would use for this format. YouTube's
+    // CDN throttles long requests to playback speed, and this is how yt-dlp
+    // avoids that; the segmented engine honours it the same way.
+    chunkSize: Number.isFinite(chunk) && chunk > 0 ? chunk : 0,
     hasVideo: !NO_CODEC(f.vcodec),
     hasAudio: !NO_CODEC(f.acodec),
   };
@@ -41,6 +88,11 @@ function labelFor(f) {
   if (f.hasAudio) return `${f.abr ? Math.round(f.abr) + ' kbps' : 'audio'} · ${f.ext}`;
   return f.ext || f.id;
 }
+
+// What yt-dlp says when a site's bot screen turned it away. Worth one more go
+// as Chrome: the Windows and macOS builds carry curl_cffi, which can present
+// Chrome's TLS and HTTP/2 fingerprint instead of Python's.
+const SCREENED = /HTTP Error 403|Forbidden|cloudflare|anti-bot|impersonat|captcha|Just a moment/i;
 
 /** Ask yt-dlp what a page contains, without downloading anything. */
 async function extract(ytdlpPath, url, opts = {}) {
@@ -59,10 +111,24 @@ async function extract(ytdlpPath, url, opts = {}) {
   if (opts.proxy) args.push('--proxy', opts.proxy);
   if (opts.userAgent) args.push('--user-agent', opts.userAgent);
   if (opts.referer) args.push('--referer', opts.referer);
-  args.push('--', url);
 
-  const raw = await runJson(ytdlpPath, args, opts.signal);
-  return normaliseInfo(raw);
+  try {
+    return normaliseInfo(await runJson(ytdlpPath, [...args, '--', url], opts.signal));
+  } catch (err) {
+    if (opts.impersonate === false || !SCREENED.test(err.message)) throw err;
+    let info;
+    try {
+      info = normaliseInfo(await runJson(ytdlpPath, [
+        ...args, '--impersonate', 'chrome', '--extractor-args', 'generic:impersonate', '--', url,
+      ], opts.signal));
+    } catch {
+      // No impersonation in this build, or the screen held. The first
+      // answer is the more useful one to report.
+      throw err;
+    }
+    info.impersonated = true;
+    return info;
+  }
 }
 
 /** Same, but keeps every entry of a playlist or channel. */
@@ -136,6 +202,23 @@ function chooseFormats(info, prefs = {}) {
   const rank = (a, b) => (a.height - b.height) || (a.fps - b.fps) || (a.tbr - b.tbr);
   const bestVideo = videos.slice().sort(rank).pop() || null;
   const bestBoth = both.slice().sort(rank).pop() || null;
+
+  // A quality the user picked by hand. It still goes through Fletch's own
+  // engines, so it keeps its parallel connections; a picture-only choice is
+  // paired with the best sound rather than arriving silent.
+  if (prefs.formatId) {
+    const pick = info.formats.find((f) => f.id === prefs.formatId);
+    if (pick && pick.hasVideo && !pick.hasAudio && bestAudio && canMerge) {
+      return {
+        video: pick, audio: bestAudio, needsMerge: true,
+        reason: `${pick.label} + ${Math.round(bestAudio.abr) || '?'} kbps audio, merged`,
+      };
+    }
+    if (pick && pick.hasAudio && !pick.hasVideo) {
+      return { video: null, audio: pick, needsMerge: false, reason: pick.label };
+    }
+    if (pick) return { video: pick, audio: null, needsMerge: false, reason: pick.label };
+  }
 
   if (audioOnly) {
     const pick = bestAudio || bestBoth;
@@ -221,6 +304,7 @@ class YtDlpDownload extends EventEmitter {
     if (this.opts.cookieFile) args.push('--cookies', this.opts.cookieFile);
     else if (this.opts.cookiesFromBrowser) args.push('--cookies-from-browser', this.opts.cookiesFromBrowser);
     if (this.opts.proxy) args.push('--proxy', this.opts.proxy);
+    if (this.opts.impersonate) args.push('--impersonate', 'chrome');
     if (this.opts.connections) args.push('--concurrent-fragments', String(this.opts.connections));
     args.push('--', this.url);
 
@@ -289,4 +373,7 @@ function engineFor(format) {
   return 'ytdlp'; // dash segments, rtmp, rtsp, ism, ...
 }
 
-module.exports = { extract, extractPlaylist, chooseFormats, YtDlpDownload, engineFor, labelFor };
+module.exports = {
+  extract, extractPlaylist, chooseFormats, YtDlpDownload, engineFor, labelFor,
+  cookieHeaderFrom, mergeCookieHeaders, normaliseInfo,
+};

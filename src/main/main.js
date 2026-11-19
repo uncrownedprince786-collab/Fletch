@@ -47,7 +47,10 @@ function linkFromArgv(argv) {
 
 const DEFAULTS = {
   downloadDir: path.join(os.homedir(), 'Downloads', 'Fletch'),
-  connections: 8,
+  // Parallel workers per file. Plenty of hosts cap each connection's speed,
+  // so more workers is more speed; a host that wants fewer says so with a
+  // 429, 503 or 403 and the downloader eases off by itself.
+  connections: 16,
   maxConcurrent: 10,
   speedLimitKbps: 0,
   sortIntoCategories: true,
@@ -559,6 +562,12 @@ if (!gotLock) {
     if (!settings.get('queueCeilingRaised', false)) {
       if (Number(settings.get('maxConcurrent', 3)) === 3) settings.set('maxConcurrent', 10);
       settings.set('queueCeilingRaised', true);
+    }
+    // 1.3.0 raised the default workers per download from 8 to 16. Same rule:
+    // only a value still sitting at the old default moves.
+    if (!settings.get('connectionsRaised', false)) {
+      if (Number(settings.get('connections', 8)) === 8) settings.set('connections', 16);
+      settings.set('connectionsRaised', true);
     }
     tasksStore = new JsonStore(path.join(userData, 'downloads.json'), { tasks: [] });
     tasksStore.load();

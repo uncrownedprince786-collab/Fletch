@@ -77,7 +77,7 @@ class DownloadManager extends EventEmitter {
   // ---- settings ------------------------------------------------------------
 
   get maxConcurrent() { return Math.max(1, this.settings.get('maxConcurrent', 10)); }
-  get connections() { return Math.max(1, Math.min(32, this.settings.get('connections', 8))); }
+  get connections() { return Math.max(1, Math.min(32, this.settings.get('connections', 16))); }
   get downloadDir() {
     return this.settings.get('downloadDir') || path.join(os.homedir(), 'Downloads', 'Fletch');
   }
@@ -164,6 +164,7 @@ class DownloadManager extends EventEmitter {
         // duration of the download and has no business being written to a
         // plain file that survives it.
         headers: stripSession(rest.headers),
+        pageHeaders: stripSession(rest.pageHeaders),
         parts: (rest.parts || []).map((p) => ({ ...p, headers: stripSession(p.headers) })),
       };
     });
@@ -527,6 +528,9 @@ class DownloadManager extends EventEmitter {
   async _setupVideo(task, opts) {
     const bin = await this.binaries.resolve('yt-dlp');
     let info = null;
+    // The headers the page itself came with, before any format's own are
+    // merged in, so that picking another quality later starts from these.
+    if (!task.pageHeaders) task.pageHeaders = { ...task.headers };
     let extractError = null;
 
     if (bin) {
@@ -606,8 +610,17 @@ class DownloadManager extends EventEmitter {
       maxHeight: task.maxHeight,
       audioOnly: task.audioOnly,
       canMerge: Boolean(ffmpeg),
+      formatId: task.preferredFormat || '',
     });
     task.formatLabel = choice.reason;
+    // The page needed Chrome's fingerprint to read; yt-dlp will need it again
+    // if it ever has to fetch the media itself.
+    task.impersonate = Boolean(info.impersonated);
+    // What to ask yt-dlp for if the site turns Fletch's own engine away.
+    task.ytdlpFallbackFormat = choice.needsMerge
+      ? `${choice.video.id}+${choice.audio.id}`
+      : (choice.video || choice.audio).id;
+    task.triedYtdlp = false;
 
     const main = choice.video || choice.audio;
     const container = task.audioOnly
@@ -627,13 +640,22 @@ class DownloadManager extends EventEmitter {
       return;
     }
 
+    // The headers yt-dlp says this format needs, plus any session cookies it
+    // picked up reading the page, on top of what the browser handed over.
+    const headersFor = (f) => {
+      const merged = { ...task.headers, ...(f.headers || {}) };
+      const cookie = ytdlp.mergeCookieHeaders(task.headers.Cookie, f.cookies);
+      if (cookie) merged.Cookie = cookie;
+      return merged;
+    };
     const mkPart = (f, role) => ({
       role,
       url: f.url,
       engine: ytdlp.engineFor(f),
       size: f.size,
       ext: f.ext,
-      headers: { ...task.headers, ...(f.headers || {}) },
+      chunkSize: f.chunkSize || 0,
+      headers: headersFor(f),
       filePath: '',
       done: false,
     });
@@ -644,8 +666,12 @@ class DownloadManager extends EventEmitter {
     } else {
       task.engine = ytdlp.engineFor(main);
       task.url = main.url;
-      task.headers = { ...task.headers, ...(main.headers || {}) };
+      task.headers = headersFor(main);
       task.size = main.size;
+      task.chunkSize = main.chunkSize || 0;
+      // yt-dlp's figure can be an estimate; the server's own answer at
+      // download time is the one to lay the file out by.
+      task.acceptRanges = undefined;
       task.parts = [];
     }
 
@@ -741,94 +767,35 @@ class DownloadManager extends EventEmitter {
     let acceptRanges = opts.acceptRanges !== undefined ? opts.acceptRanges : task.acceptRanges;
     if (size == null || acceptRanges === undefined) {
       const info = await probe(url, { headers }).catch(() => null);
-      if (info) { size = size || info.size; acceptRanges = info.acceptRanges; }
+      // The server's answer beats an extractor's estimate: laying the file out
+      // at a guessed size would truncate it or pad it with zeros.
+      if (info) { size = info.size || size; acceptRanges = info.acceptRanges; }
     }
-    // If the server blocks Node.js's TLS fingerprint (ECONNRESET), fall back
-    // to PowerShell's native HTTP stack which uses Windows Schannel.
-    let dl;
-    let psFallback = false;
-    try {
-      dl = new HttpDownload({
-        url, filePath, size, acceptRanges,
-        headers: { ...headers, 'User-Agent': headers['User-Agent'] || UA_DESKTOP },
-        connections: task.connectionsOverride || this.connections,
-        limiter: this.limiter,
-        stallMs: Math.max(5, Number(this.settings.get('stallSeconds', 90)) || 90) * 1000,
-      });
-      this._wire(task, dl, offset);
-      return await dl.start();
-    } catch (err) {
-      const msg = String(err && err.message || err);
-      // Fall back to PowerShell for remote hosts that block Node.js (TLS
-      // fingerprinting, connection reset, stalls). Skip localhost so the
-      // HTTP downloader's own retry logic (recovery tests) is not bypassed.
-      let isLocal = false;
-      try { isLocal = /localhost|127\.0\.0\.1|::1/.test(new URL(url).hostname); } catch { /* */ }
-      if (!isLocal) {
-        psFallback = true;
-      } else {
-        throw err;
-      }
-    }
-    if (psFallback) {
-      return this._runHttpPowerShell(task, url, filePath, headers, size);
-    }
-  }
-
-  async _runHttpPowerShell(task, url, filePath, headers, size) {
-    task.stage = 'Trying system network stack…';
-    this._touch(task);
-    const partPath = filePath + '.fletchpart';
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    const ua = headers['User-Agent'] || UA_DESKTOP;
-    const timeout = 120000; // 2 minutes per attempt
-    const escapedUrl = url.replace(/'/g, "''");
-    const escapedFile = partPath.replace(/'/g, "''");
-    const escapedUA = ua.replace(/'/g, "''");
-    const script = [
-      `$ProgressPreference = 'SilentlyContinue'`,
-      `try {`,
-      `  Invoke-WebRequest -Uri '${escapedUrl}' -OutFile '${escapedFile}' -UseBasicParsing -TimeoutSec ${Math.round(timeout / 1000)} -UserAgent '${escapedUA}' -ErrorAction Stop`,
-      `  Write-Output 'OK'`,
-      `} catch {`,
-      `  Write-Output "ERR: $($_.Exception.Message)"`,
-      `}`,
-    ].join('; ');
-    const { execFileSync } = require('child_process');
-    let result;
-    try {
-      result = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
-        timeout: timeout + 10000,
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-    } catch (err) {
-      await fsp.rm(partPath, { force: true }).catch(() => {});
-      throw new Error(`Download failed: ${err.message}`);
-    }
-    const output = String(result || '').trim();
-    if (!output.startsWith('OK')) {
-      await fsp.rm(partPath, { force: true }).catch(() => {});
-      throw new Error(output || 'Download failed');
-    }
-    await fsp.rename(partPath, filePath).catch(async () => {
-      await fsp.copyFile(partPath, filePath);
-      await fsp.rm(partPath, { force: true });
+    // A host that turns Node away is retried on Chromium's network stack by
+    // the request layer itself, with byte ranges and every worker intact, so
+    // there is no single-stream fallback to make here.
+    const dl = new HttpDownload({
+      url, filePath, size, acceptRanges,
+      headers: { ...headers, 'User-Agent': headers['User-Agent'] || UA_DESKTOP },
+      connections: task.connectionsOverride || this.connections,
+      chunkSize: opts.chunkSize !== undefined ? opts.chunkSize : (task.chunkSize || 0),
+      limiter: this.limiter,
+      stallMs: Math.max(5, Number(this.settings.get('stallSeconds', 90)) || 90) * 1000,
     });
-    const stat = await fsp.stat(filePath);
-    task.size = stat.size;
-    task.downloaded = stat.size;
-    task.progress = 1;
-    task.stage = '';
-    this._touch(task);
-    return { filePath, size: stat.size };
+    this._wire(task, dl, offset);
+    dl.on('upgraded', (u) => {
+      // Found out the size mid-stream and split the file up after all.
+      if (!task.parts.length) { task.acceptRanges = true; task.size = u.size; }
+      this._touch(task);
+    });
+    return dl.start();
   }
 
   async _runHls(task, url, filePath, remux, opts = {}) {
     const dl = new HlsDownload({
       url, filePath,
       headers: opts.headers || task.headers,
-      connections: Math.min(16, (task.connectionsOverride || this.connections) * 2),
+      connections: Math.min(24, (task.connectionsOverride || this.connections) * 2),
       preferHeight: task.maxHeight,
     });
     this._wire(task, dl, opts.offset || 0);
@@ -868,7 +835,7 @@ class DownloadManager extends EventEmitter {
       url: task.url,
       filePath: task.filePath,
       headers: task.headers,
-      connections: Math.min(16, (task.connectionsOverride || this.connections) * 2),
+      connections: Math.min(24, (task.connectionsOverride || this.connections) * 2),
     });
     this._wire(task, dl);
     const res = await dl.start();
@@ -959,6 +926,7 @@ class DownloadManager extends EventEmitter {
       connections: this.connections,
       cookiesFromBrowser: this.settings.get('cookiesFromBrowser', '') || undefined,
       proxy: this.settings.get('proxy', '') || undefined,
+      impersonate: Boolean(task.impersonate),
     });
     this._wire(task, dl);
     try {
@@ -992,7 +960,7 @@ class DownloadManager extends EventEmitter {
       const res = part.engine === 'hls'
         ? await this._runHls(task, part.url, part.filePath, false, { headers: part.headers, offset })
         : await this._runHttp(task, part.url, part.filePath, part.headers, offset,
-          { size: part.size ?? null, acceptRanges: undefined });
+          { size: part.size ?? null, acceptRanges: undefined, chunkSize: part.chunkSize || 0 });
 
       if (res && (res.cancelled || res.paused)) return res;
       part.done = true;
@@ -1141,9 +1109,48 @@ class DownloadManager extends EventEmitter {
     this.emit('failed', task);
   }
 
+  /**
+   * Media yt-dlp found, that the site then refused to hand to Fletch's own
+   * engine — a signed URL that will not take a second client, a CDN that
+   * screens anything not shaped like the extractor. yt-dlp knows that site's
+   * rules, so it gets to fetch the file itself before anything is reported.
+   */
+  _handToYtDlp(task, message) {
+    if (!task.extractor || !task.ytdlpFallbackFormat || task.triedYtdlp) return false;
+    if (!['http', 'hls', 'merge', 'dash'].includes(task.engine)) return false;
+    if (!/HTTP (40[13]|410|429)|Access denied|ranged request|refus|ECONNRESET|socket hang up|TLS|certificate|blocks automated/i.test(message)) return false;
+
+    task.triedYtdlp = true;
+    task.engine = 'ytdlp';
+    task.ytdlpFormat = task.ytdlpFallbackFormat;
+    const leftovers = [task.filePath, ...(task.parts || []).map((p) => p.filePath)].filter(Boolean);
+    task.parts = [];
+    task.partIndex = 0;
+    task.downloaded = 0;
+    task.progress = 0;
+    task.state = 'queued';
+    task.error = '';
+    task.stage = 'Handing over to yt-dlp…';
+    task.warning = 'The site would not serve this to Fletch’s own downloader, so yt-dlp is fetching it instead.';
+    this._touch(task);
+    this._persist();
+    // Clear what the first attempt left so yt-dlp starts clean.
+    (async () => {
+      for (const file of leftovers) {
+        await fsp.rm(`${file}.fletchpart`, { force: true }).catch(() => {});
+        await fsp.rm(`${file}.fletchpart.meta`, { force: true }).catch(() => {});
+      }
+      await fsp.rm(path.join(this.tmpDir, task.id), { recursive: true, force: true }).catch(() => {});
+    })();
+    // _start's finally drains the queue once this task is off the live list.
+    return true;
+  }
+
   _fail(task, err) {
     if (task.state === 'cancelled') return;
     const message = err && err.message ? err.message : String(err);
+
+    if (this._handToYtDlp(task, message)) return;
 
     // Sites that block non-browser TLS fingerprints (connection reset during
     // handshake) cannot be downloaded by Fletch's own HTTP stack. Say so
@@ -1315,7 +1322,14 @@ class DownloadManager extends EventEmitter {
     this._persist();
   }
 
-  /** Re-pick a format on an already-analysed video task and queue it again. */
+  /**
+   * Re-pick a format on an already-analysed video task and queue it again.
+   *
+   * The page is read afresh, because the media URLs it gave last time are
+   * short-lived, and the chosen format then goes through Fletch's own engines
+   * like any other — split across parallel connections — rather than being
+   * handed whole to yt-dlp's single one.
+   */
   async chooseFormat(id, formatId) {
     const task = this.tasks.get(id);
     if (!task) throw new Error('That download is no longer in the list.');
@@ -1323,15 +1337,23 @@ class DownloadManager extends EventEmitter {
     if (!bin) throw new Error('yt-dlp is not installed.');
 
     this.cancel(id);
-    task.ytdlpFormat = formatId;
-    task.engine = 'ytdlp';
-    task.state = 'queued';
+    // Back to the page and the headers it came with: last time's media URL
+    // and the format-specific headers merged into it are both spent.
+    task.url = task.pageUrl || task.sourceUrl;
+    if (task.pageHeaders) task.headers = { ...task.pageHeaders };
+    task.preferredFormat = formatId;
+    task.ytdlpFormat = formatId; // used only if the native engines are refused
+    task.state = 'analyzing';
+    task.stage = 'Fetching that quality…';
     task.error = '';
+    task.warning = '';
     task.downloaded = 0;
     task.progress = 0;
+    task.parts = [];
+    task.partIndex = 0;
     task.formatLabel = (task.availableFormats || []).find((f) => f.id === formatId)?.label || formatId;
     this._touch(task);
-    this._drain();
+    this._analyse(task, { forceVideo: true }).catch((err) => this._fail(task, err));
     return task;
   }
 

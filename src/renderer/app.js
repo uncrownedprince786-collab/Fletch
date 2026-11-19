@@ -1004,7 +1004,7 @@ function settingsDialog() {
     const row = el('div', 'row2');
     const a = el('div');
     numberField(a, 'connections', 'Connections per download',
-      'How many pieces a file is split into. 8 suits most connections; more is not always faster.', 1, 32);
+      'How many parts of a file download at once. 16 suits most connections; Fletch eases off by itself when a server allows fewer.', 1, 32);
     row.appendChild(a);
     const b = el('div');
     numberField(b, 'maxConcurrent', 'Downloads at once',

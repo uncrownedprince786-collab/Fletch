@@ -21,6 +21,13 @@ const THROTTLE_CODES = new Set([429, 503]);
 const MAX_THROTTLE_HITS = 40;
 // If every connection goes quiet for this long, stop waiting and say so.
 const DEFAULT_STALL_MS = 90000;
+// Room each connection has to keep receiving while the disk catches up. The
+// stream default of 16 KB pauses the socket on almost every chunk, which on a
+// slow or busy drive (an HDD download folder) costs real throughput.
+const SINK_BUFFER = 1024 * 1024;
+// How long a refused ranged request waits for another connection to prove
+// ranges do work before concluding they do not.
+const RANGE_PROOF_WAIT_MS = 3000;
 
 function parseRetryAfter(value) {
   if (!value) return 0;
@@ -56,6 +63,14 @@ class HttpDownload extends EventEmitter {
     this.maxConnections = Math.max(1, Math.min(32, spec.connections || 8));
     this.limiter = spec.limiter || null;
     this.insecure = Boolean(spec.insecure);
+    // Largest byte range one request may ask for; 0 means "the whole segment".
+    // Some CDNs (YouTube's among them) throttle long requests to playback
+    // speed but serve short ones at full speed, so each worker walks its range
+    // in chunks of this size over the same kept-alive socket.
+    this.chunkSize = Number.isFinite(spec.chunkSize) && spec.chunkSize >= 256 * 1024 ? Math.floor(spec.chunkSize) : 0;
+    // Set once any ranged request comes back 206. After that a refusal is the
+    // server limiting connections, not a server that cannot do ranges.
+    this._rangeProven = false;
 
     this.segments = [];
     this.downloaded = 0;
@@ -129,7 +144,13 @@ class HttpDownload extends EventEmitter {
   _abortAll() {
     for (const w of [...this._active]) {
       try { w.req && w.req.destroy(); } catch { /* already gone */ }
-      try { w.sink && w.sink.destroy(); } catch { /* already gone */ }
+      // Only a cancel may throw buffered bytes away. Anything else keeps the
+      // file, and those bytes are already counted as fetched: dropping them
+      // would leave a hole of zeros that a resume steps straight over. The
+      // worker's own finish() ends the sink, which flushes them to disk.
+      if (this._stopReason === 'cancelled') {
+        try { w.sink && w.sink.destroy(); } catch { /* already gone */ }
+      }
     }
   }
 
@@ -192,7 +213,10 @@ class HttpDownload extends EventEmitter {
     }
 
     const failed = this.segments.find((s) => s.state === 'error');
-    if (failed) throw failed.error || new Error('A connection failed and could not be recovered.');
+    if (failed) {
+      await this._flushMeta(true);
+      throw failed.error || new Error('A connection failed and could not be recovered.');
+    }
 
     await this._finalize();
   }
@@ -202,7 +226,7 @@ class HttpDownload extends EventEmitter {
     while (true) {
       if (this._stopReason) break;
 
-      const pending = this.segments.filter((s) => s.state === 'pending');
+      const pending = this._ready();
       while (pending.length && this._active.size < this.maxConnections) {
         this._spawn(pending.shift());
       }
@@ -246,8 +270,16 @@ class HttpDownload extends EventEmitter {
     });
   }
 
+  /** Pending segments that may go out now, i.e. not waiting out a refusal. */
+  _ready() {
+    const now = Date.now();
+    return this.segments.filter((s) => s.state === 'pending' && !(s.notBefore > now));
+  }
+
   /** Steal the back half of the slowest-to-finish segment for an idle slot. */
   _rebalance() {
+    // Work already queued comes first; the next pass of the pump starts it.
+    if (this._ready().length) return;
     while (this._active.size < this.maxConnections) {
       if (!this.acceptRanges) return;
       let victim = null;
@@ -265,6 +297,7 @@ class HttpDownload extends EventEmitter {
         start: mid,
         end: victim.end,
         pos: mid,
+        disk: mid,
         state: 'pending',
         retries: 0,
         error: null,
@@ -302,18 +335,30 @@ class HttpDownload extends EventEmitter {
         await this._attempt(worker);
         if (this._stopReason) { seg.state = 'pending'; return; }
         if (seg.pos > seg.end) { seg.state = 'done'; return; }
+        // Finished one chunk of a chunked range: ask for the next one.
+        if (worker.chunkComplete) continue;
         // Short read without an error: treat as a dropped connection and retry.
         throw new Error('Connection closed before the range was complete');
       } catch (err) {
         if (this._stopReason) { seg.state = 'pending'; return; }
 
         if (err.rangeRefused && this.acceptRanges) {
-          // Stop the whole pool; _run restarts the download in one stream.
-          this._needsSingleStream = true;
-          this._stopReason = 'restart-single';
-          this._abortAll();
-          seg.state = 'pending';
-          return;
+          // All the connections go out at once, so a refusal can land before
+          // any sibling has shown that ranges work. Give them a moment: a
+          // server that serves some ranged requests and refuses others is
+          // capping connections, and that calls for fewer sockets, not one.
+          if (!this._rangeProven && this._active.size > 1) await this._waitForRangeProof();
+          if (this._stopReason) { seg.state = 'pending'; return; }
+          if (this._rangeProven && err.statusCode === 403) {
+            err.throttle = true;
+          } else if (!this._rangeProven) {
+            // Stop the whole pool; _run restarts the download in one stream.
+            this._needsSingleStream = true;
+            this._stopReason = 'restart-single';
+            this._abortAll();
+            seg.state = 'pending';
+            return;
+          }
         }
 
         if (err.throttle) {
@@ -323,7 +368,7 @@ class HttpDownload extends EventEmitter {
           if (this.throttleHits > MAX_THROTTLE_HITS) {
             seg.state = 'error';
             seg.error = new Error(
-              'The server keeps refusing extra connections (HTTP 429). '
+              `The server keeps refusing extra connections (HTTP ${err.statusCode || 429}). `
               + 'Lower the connection count in Settings, or try again later.'
             );
             throw seg.error;
@@ -333,15 +378,30 @@ class HttpDownload extends EventEmitter {
             this.maxConnections = narrower;
             this.emit('throttled', { connections: narrower, requested: this.requestedConnections });
           }
+          // The range waits its turn in the queue rather than in this slot,
+          // so the connections the server does accept keep working meanwhile.
+          // Backing off only makes sense when nothing is getting through; while
+          // other connections are being served, the narrower pool is already
+          // the server's answer, and the range can go as soon as a slot frees.
+          // A Retry-After is the server's own instruction and always stands.
+          const served = [...this._active].some((w) => w !== worker && w.sink);
+          const delay = err.retryAfter || (served ? 0 : Math.min(20000, 750 * this.throttleHits));
           seg.state = 'pending';
-          await sleep(err.retryAfter || Math.min(20000, 750 * this.throttleHits));
+          seg.notBefore = Date.now() + delay;
           return;
         }
 
         seg.retries++;
-        if (seg.retries > MAX_RETRIES) {
+        if (err.fatal || seg.retries > MAX_RETRIES) {
           seg.state = 'error';
           seg.error = err;
+          // The download cannot finish now; stop the rest of the pool rather
+          // than let it fetch the remainder of a file that will be reported
+          // as failed. What it has so far is checkpointed for a retry.
+          if (!this._stopReason) {
+            this._stopReason = 'failed';
+            this._abortAll();
+          }
           throw err;
         }
         this.emit('retry', { segment: seg.id, attempt: seg.retries, message: err.message });
@@ -350,23 +410,88 @@ class HttpDownload extends EventEmitter {
     }
   }
 
+  /** Wait until a sibling connection gets a 206, everything settles, or time runs out. */
+  async _waitForRangeProof() {
+    const until = Date.now() + RANGE_PROOF_WAIT_MS;
+    while (!this._rangeProven && !this._stopReason && Date.now() < until && this._active.size > 1) {
+      await sleep(100);
+    }
+  }
+
+  /**
+   * The server just told us how big the file is, which the probe could not.
+   * Lay the file out at that size and, if the server takes byte ranges, turn
+   * this one stream into a pool: the next rebalance hands the back halves of
+   * the file to fresh connections while this one carries on from the front.
+   */
+  _learnSize(res, code) {
+    const h = res.headers || {};
+    // A compressed body's length is not the file's length.
+    if (h['content-encoding'] && !/^identity$/i.test(String(h['content-encoding']).trim())) return;
+    let total = null;
+    if (code === 206) {
+      const m = /\/(\d+)\s*$/.exec(String(h['content-range'] || ''));
+      if (m) total = Number(m[1]);
+    } else if (code === 200) {
+      const len = Number(h['content-length']);
+      if (Number.isFinite(len) && len > 0) total = len;
+    }
+    if (!total || this.segments.length !== 1) return;
+
+    this.size = total;
+    this.segments[0].end = total - 1;
+    try { fs.truncateSync(this.partPath, total); } catch { /* grows as it is written instead */ }
+
+    const ranges = code === 206 || /bytes/i.test(String(h['accept-ranges'] || ''));
+    if (ranges && total >= MIN_SPLIT_BYTES * 2) {
+      this.acceptRanges = true;
+      this.emit('upgraded', { size: total, connections: this.maxConnections });
+    }
+  }
+
   /** One connection covering [seg.pos, seg.end]. Resolves when the socket ends. */
   _attempt(worker) {
     const seg = worker.seg;
+    // A sink that failed part-way leaves bytes counted that never reached the
+    // disk. Step back to the last byte known to be there and fetch from it.
+    if (typeof seg.disk !== 'number') seg.disk = seg.pos;
+    if (seg.disk < seg.pos) {
+      this.downloaded -= seg.pos - seg.disk;
+      seg.pos = seg.disk;
+    }
     const headers = { ...this.headers };
-    if (this.acceptRanges) headers.Range = `bytes=${seg.pos}-${seg.end}`;
-    else if (seg.pos > 0) headers.Range = `bytes=${seg.pos}-`;
+    // The last byte this request asks for. With a chunk ceiling it is short of
+    // the segment's end, and the worker comes back for the rest.
+    let reqEnd = seg.end;
+    if (this.acceptRanges) {
+      if (this.chunkSize) reqEnd = Math.min(seg.end, seg.pos + this.chunkSize - 1);
+      headers.Range = `bytes=${seg.pos}-${reqEnd}`;
+    } else if (seg.pos > 0) headers.Range = `bytes=${seg.pos}-`;
+    worker.chunkComplete = false;
 
     return new Promise((resolve, reject) => {
       let settled = false;
+      let sinkError = null;
       const finish = (err) => {
         if (settled) return;
         settled = true;
         try { worker.req && worker.req.destroy(); } catch { /* already gone */ }
-        if (worker.sink && !worker.sink.destroyed) worker.sink.end();
+        const sink = worker.sink;
         worker.req = null;
         worker.sink = null;
-        err ? reject(err) : resolve();
+        const done = () => {
+          const failure = err || sinkError;
+          failure ? reject(failure) : resolve();
+        };
+        // Settle only once the sink has written everything it was handed, so
+        // that by the time a worker is idle — and a checkpoint or a resume
+        // reads its position — every byte it counted is really on disk.
+        if (sink && !sink.destroyed) {
+          sink.once('close', done);
+          sink.end();
+        } else {
+          done();
+        }
       };
 
       request(this.url, { headers, timeout: 45000, insecure: this.insecure })
@@ -389,6 +514,7 @@ class HttpDownload extends EventEmitter {
             res.destroy();
             const err = new Error(`HTTP ${code} on a ranged request`);
             err.rangeRefused = true;
+            err.statusCode = code;
             return finish(err);
           }
 
@@ -398,31 +524,57 @@ class HttpDownload extends EventEmitter {
             res.destroy();
             const err = new Error(`Server is limiting connections (HTTP ${code})`);
             err.throttle = true;
+            err.statusCode = code;
             err.retryAfter = retryAfter;
             return finish(err);
           }
           if (code !== 200 && code !== 206) {
             res.destroy();
-            return finish(new Error(`HTTP ${code} on segment ${seg.id}`));
+            let err;
+            if (code === 401 || code === 403) {
+              err = new Error(`The server refused the download (HTTP ${code}). The link may have expired, or need you signed in.`);
+            } else if (code === 404 || code === 410) {
+              err = new Error(`The file is no longer at that address (HTTP ${code}).`);
+            } else {
+              err = new Error(`HTTP ${code} on segment ${seg.id}`);
+            }
+            // These answers do not change on asking again; eight retries with
+            // back-off would only make the user wait a minute to hear it.
+            err.fatal = [400, 401, 403, 404, 410, 451].includes(code);
+            err.statusCode = code;
+            return finish(err);
           }
+          if (code === 206) this._rangeProven = true;
+          if (res.transport === 'chromium') this.viaChromium = true;
+          if (!this.size) this._learnSize(res, code);
 
-          const sink = fs.createWriteStream(this.partPath, { flags: 'r+', start: seg.pos });
+          const sink = fs.createWriteStream(this.partPath, { flags: 'r+', start: seg.pos, highWaterMark: SINK_BUFFER });
           worker.req = res.request || res;
           worker.sink = sink;
 
-          sink.on('error', (e) => { try { res.destroy(); } catch { /* ignore */ } finish(e); });
+          sink.on('error', (e) => {
+            sinkError = sinkError || e;
+            try { res.destroy(); } catch { /* ignore */ }
+            finish(e);
+          });
 
           res.on('data', (chunk) => {
             if (this._stopReason) { res.destroy(); return; }
 
+            // Where this response should stop: the end of the chunk asked
+            // for, or sooner if a sibling has since taken the back of the range.
+            const stopAt = Math.min(seg.end, reqEnd);
             let buf = chunk;
             if (this.acceptRanges) {
-              const room = seg.end - seg.pos + 1;
+              const room = stopAt - seg.pos + 1;
               if (room <= 0) { res.destroy(); return finish(); }
               if (buf.length > room) buf = buf.subarray(0, room);
             }
 
-            const ok = sink.write(buf);
+            // seg.disk trails seg.pos by whatever the sink still holds. It is
+            // what checkpoints record, so a crash never skips unwritten bytes.
+            const landed = seg.pos + buf.length;
+            const ok = sink.write(buf, (e) => { if (!e && landed > seg.disk) seg.disk = landed; });
             seg.pos += buf.length;
             this.downloaded += buf.length;
             this.meter.add(buf.length);
@@ -433,7 +585,15 @@ class HttpDownload extends EventEmitter {
             // chunk of a segment still counts against the global cap.
             const wait = this.limiter ? this.limiter.consume(buf.length) : null;
 
-            if (this.acceptRanges && seg.pos > seg.end) {
+            if (this.acceptRanges && seg.pos > stopAt) {
+              if (seg.pos <= seg.end) {
+                // One chunk of a longer range is in. Let the response end by
+                // itself so the socket goes back to the pool and the next
+                // chunk goes out on it without a fresh handshake.
+                worker.chunkComplete = true;
+                return;
+              }
+              // The range is complete, or a sibling took the rest of it.
               res.destroy();
               return finish();
             }
@@ -450,7 +610,12 @@ class HttpDownload extends EventEmitter {
             }
           });
 
-          res.on('end', () => finish());
+          res.on('end', () => {
+            // No length was ever given, so the server ending the body is the
+            // only word on where the file ends.
+            if (!this.size && !this.acceptRanges) seg.end = seg.pos - 1;
+            finish();
+          });
           res.on('aborted', () => finish(this._stopReason ? null : new Error('Connection aborted')));
           res.on('error', (e) => finish(this._stopReason ? null : e));
         })
@@ -477,6 +642,7 @@ class HttpDownload extends EventEmitter {
         start: i * chunk,
         end: i === n - 1 ? this.size - 1 : (i + 1) * chunk - 1,
         pos: i * chunk,
+        disk: i * chunk,
         state: 'pending',
         retries: 0,
         error: null,
@@ -487,6 +653,7 @@ class HttpDownload extends EventEmitter {
         start: 0,
         end: this.size ? this.size - 1 : Number.MAX_SAFE_INTEGER,
         pos: 0,
+        disk: 0,
         state: 'pending',
         retries: 0,
         error: null,
@@ -510,10 +677,15 @@ class HttpDownload extends EventEmitter {
         start: s.start,
         end: s.end,
         pos: s.pos,
+        disk: s.pos,
         state: s.pos > s.end ? 'done' : 'pending',
         retries: 0,
         error: null,
       }));
+      // A download split into pieces must resume as pieces: without ranges,
+      // each piece would be refetched from its offset to the end of the file
+      // and write straight over its neighbours.
+      if (raw.acceptRanges && this.size) this.acceptRanges = true;
       this.downloaded = this.segments.reduce((a, s) => a + (s.pos - s.start), 0);
       this.emit('resumed', { downloaded: this.downloaded });
       return true;
@@ -531,7 +703,13 @@ class HttpDownload extends EventEmitter {
       size: this.size,
       acceptRanges: this.acceptRanges,
       updated: now,
-      segments: this.segments.map((s) => ({ start: s.start, end: s.end, pos: s.pos })),
+      // Only what is confirmed on disk: a checkpoint ahead of the data would
+      // have a resume skip over bytes that never landed.
+      segments: this.segments.map((s) => ({
+        start: s.start,
+        end: s.end,
+        pos: typeof s.disk === 'number' ? Math.min(s.pos, s.disk) : s.pos,
+      })),
     };
     try { await fsp.writeFile(this.metaPath, JSON.stringify(payload)); }
     catch { /* a lost checkpoint only costs us a restart */ }
@@ -590,6 +768,8 @@ class HttpDownload extends EventEmitter {
       eta: this.eta,
       connections: this._active.size,
       segments: this.snapshotSegments(),
+      // Worth saying: it explains why a site that "blocks downloaders" works.
+      note: this.viaChromium ? 'through Chrome’s network stack' : '',
     });
   }
 }

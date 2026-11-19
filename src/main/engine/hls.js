@@ -226,6 +226,9 @@ class HlsDownload extends EventEmitter {
     this.partPath = spec.filePath + '.fletchpart';
     this.headers = spec.headers || {};
     this.connections = Math.max(1, Math.min(24, spec.connections || 8));
+    // Room to run ahead of the writer, grown with the pool so that a wide
+    // pool is not left idle behind one slow segment at the front.
+    this.lookahead = Math.max(LOOKAHEAD, this.connections + 8);
     this.preferHeight = spec.preferHeight || 0; // 0 = best available
     this.meter = new SpeedMeter();
 
@@ -393,7 +396,7 @@ class HlsDownload extends EventEmitter {
       while (
         fetchAt < segments.length &&
         inFlight.size < this.connections &&
-        fetchAt - writeAt < LOOKAHEAD
+        fetchAt - writeAt < this.lookahead
       ) {
         const index = fetchAt++;
         const job = this._fetchSegment(segments[index])

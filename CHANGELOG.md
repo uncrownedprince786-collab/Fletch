@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.3.0
+
+Faster downloads, and more sites that work.
+
+- **16 parallel workers per file by default** (was 8). Hosts that cap each
+  connection's speed are now roughly twice as fast. Anyone still on the old
+  default of 8 is moved up; a value you chose yourself is left alone. Fletch
+  still eases off by itself when a server allows fewer.
+- **Sites that block downloaders now go through Chrome's own network stack.**
+  When a host resets Node's connection or answers with a bot-screen 403
+  (Cloudflare, Akamai and the like), the request is retried through
+  Chromium — Chrome's TLS and HTTP/2 fingerprint, the system's certificates
+  and proxy — and that host stays there, *with all of its parallel workers*.
+  This replaces the PowerShell fallback, which downloaded on one connection,
+  froze the whole app while it ran, dropped cookies and Referer, and gave up
+  after two minutes.
+- **A download that starts as one stream becomes many.** When the size was
+  not known up front, the first response's size now splits the file across
+  workers mid-download. Files with no length at all now finish instead of
+  failing with "Connection closed before the range was complete".
+- **A server that refuses extra connections with 403 is treated as a cap,**
+  not as "ranges unsupported": Fletch narrows the pool instead of restarting
+  the whole file on a single connection. Refused pieces no longer hold a
+  slot while they wait, so the connections that are accepted keep working.
+- **Video sites:** the session cookies yt-dlp picks up while reading a page
+  now go with the media requests (many sites 403 without them); yt-dlp's
+  chunk size is honoured, so YouTube's CDN no longer throttles long requests
+  to playback speed; an estimated size never decides the file's length.
+- **If a site refuses Fletch's own engine** for a video yt-dlp understood,
+  yt-dlp now fetches it instead of the download failing. Pages behind a bot
+  screen are re-read with yt-dlp's Chrome impersonation.
+- **Picking a quality by hand keeps the parallel engine** (it used to hand the
+  whole download to yt-dlp on one connection), and a picture-only choice is
+  paired with the best audio.
+- HTTP 401/403/404/410 fail straight away instead of after a minute of
+  retries, and the rest of the pool stops with them.
+- Pausing no longer discards bytes still in the write buffer, and checkpoints
+  only record bytes confirmed on disk, so a resume after a pause or a crash
+  cannot leave a hole of zeros in the file.
+- New tests: `workers.test.js`, `extractor.test.js`, and
+  `npm run test:electron` for the Chromium path.
+
 ## 1.2.10
 
 - HTTP requests that fail because a host blocks Node.js' TLS fingerprint
