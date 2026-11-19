@@ -103,7 +103,7 @@ set it in **Windows Settings → Apps → Default apps**.
 ## 3. Using it
 
 **Just click a download link.** With the extension paired, Chrome hands it to
-Fletch and it downloads across 8 connections.
+Fletch and it downloads the file in 16 parts at once.
 
 | | |
 |---|---|
@@ -145,6 +145,7 @@ The release target is in `package.json` under `build.publish` — change the
 |---|---|
 | A site's download breaks when Fletch takes it | Extension popup → untick **Catch downloads from this browser**, or add that file type to the exceptions in its options |
 | Slow, or keeps reconnecting | Settings → Speed → lower **Connections per download**. Some servers only allow 2–3, and Fletch backs off on its own when they say so |
+| A site seems to block downloaders | Fletch already retries those through Chrome's own network stack, keeping all its connections. A site that shows a "Just a moment…" check page needs a real browser: use the extension's grabber, which downloads it through Chrome |
 | Video has no sound | ffmpeg joins the two tracks. Settings → Helpers should show it **Ready** |
 | A members-only or DRM video fails | Encrypted streams (Widevine, SAMPLE-AES) cannot be decrypted, by design |
 | A torrent sits at "looking for peers" | The link may be dead, or your network may block peer traffic. Fletch gives up after 90s rather than hanging |
@@ -165,8 +166,9 @@ Everything lives in `C:\Users\NEW TECH\Documents\Fletch`.
 
 ```bash
 npm start          # run from source
-npm test           # 9 offline suites, no network needed
+npm test           # 21 offline suites, no network needed
 npm run test:live  # fetches real files from the internet
+npm run test:electron  # checks the Chrome network stack path inside Electron
 npm run dist:win   # rebuild the installer into release\
 npm run release    # build and publish to GitHub Releases
 ```

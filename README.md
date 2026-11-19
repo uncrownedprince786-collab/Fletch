@@ -46,7 +46,9 @@ no paid tier, because there is no tier.
 
 | | |
 |---|---|
-| **Multi-connection transfer** | Files split across up to 32 parallel connections. |
+| **Multi-connection transfer** | Files split across up to 32 parallel connections, 16 by default. |
+| **Splits even mid-download** | A file whose size the server would not give up front is split across connections as soon as the first response says how big it is. |
+| **Gets past downloader blocks** | A site that turns away scripted downloads (Cloudflare, Akamai and the like) is retried through Chrome's own network stack, built into Fletch — with every parallel connection intact. |
 | **Dynamic segment stealing** | A connection that finishes early takes the back half of whichever peer has the most left. One slow connection can't hold the tail of a download hostage. *Measured: 8 segments became 15 mid-download.* |
 | **Real resume** | Progress is checkpointed next to the file. A pause, a crash or a reboot continues where it stopped. |
 | **Adaptive concurrency** | A server answering with HTTP 429 is taken at its word — Fletch narrows the pool instead of hammering. *Measured: eased 12 → 3 against a server capping at 3, and still finished intact.* |
@@ -182,8 +184,9 @@ Without them, direct file links and HLS streams still work.
 npm install
 npm start            # run from source
 
-npm test             # 10 offline suites, no network needed
+npm test             # 21 offline suites, no network needed
 npm run test:live    # fetches real files from the internet
+npm run test:electron  # the Chrome network stack path, inside Electron
 
 npm run dist:win     # Windows installer + portable
 npm run dist         # for whichever platform you are on
